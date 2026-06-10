@@ -1,0 +1,27 @@
+/**
+ * Copilot SDK for Rust - custom theme styles.
+ * Infima variable reference: https://docusaurus.io/docs/styling-layout
+ */
+
+:root {
+  --ifm-color-primary: #b7410e;
+  --ifm-color-primary-dark: #a53b0d;
+  --ifm-color-primary-darker: #9c370c;
+  --ifm-color-primary-darkest: #812d0a;
+  --ifm-color-primary-light: #c9470f;
+  --ifm-color-primary-lighter: #d24a10;
+  --ifm-color-primary-lightest: #e3541a;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #ef8b5e;
+  --ifm-color-primary-dark: #ec7642;
+  --ifm-color-primary-darker: #ea6b33;
+  --ifm-color-primary-darkest: #d4561f;
+  --ifm-color-primary-light: #f2a07a;
+  --ifm-color-primary-lighter: #f4ad8b;
+  --ifm-color-primary-lightest: #f8d0bd;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}

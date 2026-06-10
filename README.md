@@ -4,6 +4,17 @@ Rust SDK for interacting with the GitHub Copilot CLI agent runtime (JSON-RPC ove
 
 This is a Rust port of the upstream SDKs and is currently in technical preview.
 
+## Documentation
+
+Full documentation lives in [`website/`](website/) as a [Docusaurus](https://docusaurus.io) site, covering getting started, core concepts, task guides, a complete API reference, and the examples catalog.
+
+```bash
+cd website
+npm install
+npm start        # local dev server with hot reload
+npm run build    # static build into website/build
+```
+
 ## Requirements
 
 - Rust 1.85+ (Edition 2024)
