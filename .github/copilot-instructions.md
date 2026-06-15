@@ -4,9 +4,9 @@ This repository is a Rust SDK for the GitHub Copilot CLI runtime.
 
 ## Start Here (fast orientation)
 
-1. Read `/home/runner/work/copilot-rust-sdk/copilot-rust-sdk/dayour/copilot-rust-sdk/AGENTS.md` for repository-specific workflow rules.
-2. Read `/home/runner/work/copilot-rust-sdk/copilot-rust-sdk/dayour/copilot-rust-sdk/README.md` for feature overview and examples.
-3. Check `/home/runner/work/copilot-rust-sdk/copilot-rust-sdk/dayour/copilot-rust-sdk/.github/workflows/ci.yml` to mirror CI checks locally.
+1. Read `AGENTS.md` for repository-specific workflow rules.
+2. Read `README.md` for feature overview and examples.
+3. Check `.github/workflows/ci.yml` to mirror CI checks locally.
 
 ## Codebase layout
 
