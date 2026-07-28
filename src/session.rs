@@ -42,6 +42,13 @@ pub type PermissionHandler =
 /// Handler for tool invocations.
 pub type ToolHandler = Arc<dyn Fn(&str, &Value) -> ToolResultObject + Send + Sync>;
 
+/// Handler for tool invocations that also receives the invocation metadata
+/// (session id, tool-call id, and propagated W3C Trace Context). Prefer this
+/// over [`ToolHandler`] for new code; mirrors nodejs's
+/// `ToolHandler<TArgs> = (args, invocation: ToolInvocation) => ...`.
+pub type ToolHandlerWithInvocation =
+    Arc<dyn Fn(&Value, &crate::types::ToolInvocation) -> ToolResultObject + Send + Sync>;
+
 /// Handler for user input requests.
 pub type UserInputHandler =
     Arc<dyn Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse + Send + Sync>;
@@ -96,6 +103,8 @@ pub struct RegisteredTool {
     pub tool: Tool,
     /// Handler for tool invocations.
     pub handler: Option<ToolHandler>,
+    /// Invocation-aware handler, preferred over `handler` when both are set.
+    pub invocation_handler: Option<ToolHandlerWithInvocation>,
 }
 
 // =============================================================================
@@ -134,6 +143,10 @@ struct SessionState {
     event_handlers: HashMap<u64, EventHandler>,
     /// Next handler ID.
     next_handler_id: AtomicU64,
+    /// Provider for the current W3C Trace Context, propagated onto outbound
+    /// `session.send` requests. Mirrors nodejs's per-session
+    /// `traceContextProvider` (see `session.ts` constructor).
+    trace_context_provider: Option<crate::trace::TraceContextProvider>,
 }
 
 /// A Copilot conversation session.
@@ -212,6 +225,7 @@ impl Session {
                 hooks: None,
                 event_handlers: HashMap::new(),
                 next_handler_id: AtomicU64::new(1),
+                trace_context_provider: None,
             })),
             invoke_fn: Arc::new(invoke_fn),
         }
@@ -607,12 +621,28 @@ impl Session {
     /// Returns the message ID.
     pub async fn send(&self, options: impl Into<MessageOptions>) -> Result<String> {
         let options = options.into();
-        let params = serde_json::json!({
+        let provider = {
+            let state = self.state.read().await;
+            state.trace_context_provider.clone()
+        };
+        let trace = crate::trace::get_trace_context(provider.as_ref()).await;
+        let mut params = serde_json::json!({
             "sessionId": self.session_id,
             "prompt": options.prompt,
             "attachments": options.attachments,
             "mode": options.mode,
+            "agentMode": options.agent_mode,
+            "requestHeaders": options.request_headers,
+            "displayPrompt": options.display_prompt,
         });
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(traceparent) = trace.traceparent {
+                obj.insert("traceparent".into(), Value::String(traceparent));
+            }
+            if let Some(tracestate) = trace.tracestate {
+                obj.insert("tracestate".into(), Value::String(tracestate));
+            }
+        }
 
         let result = (self.invoke_fn)("session.send", Some(params)).await?;
 
@@ -679,7 +709,37 @@ impl Session {
     pub async fn register_tool_with_handler(&self, tool: Tool, handler: Option<ToolHandler>) {
         let mut state = self.state.write().await;
         let name = tool.name.clone();
-        state.tools.insert(name, RegisteredTool { tool, handler });
+        state.tools.insert(
+            name,
+            RegisteredTool {
+                tool,
+                handler,
+                invocation_handler: None,
+            },
+        );
+    }
+
+    /// Register a tool with an invocation-aware handler.
+    ///
+    /// The handler receives the raw arguments plus a [`ToolInvocation`]
+    /// (session id, tool-call id, and propagated W3C Trace Context), matching
+    /// nodejs's `ToolHandler(args, invocation)` signature. Preferred over
+    /// [`register_tool_with_handler`](Self::register_tool_with_handler) for new code.
+    pub async fn register_tool_with_invocation_handler(
+        &self,
+        tool: Tool,
+        handler: Option<ToolHandlerWithInvocation>,
+    ) {
+        let mut state = self.state.write().await;
+        let name = tool.name.clone();
+        state.tools.insert(
+            name,
+            RegisteredTool {
+                tool,
+                handler: None,
+                invocation_handler: handler,
+            },
+        );
     }
 
     /// Register multiple tools.
@@ -692,6 +752,7 @@ impl Session {
                 RegisteredTool {
                     tool,
                     handler: None,
+                    invocation_handler: None,
                 },
             );
         }
@@ -710,6 +771,10 @@ impl Session {
     }
 
     /// Invoke a tool handler.
+    ///
+    /// Prefer [`invoke_tool_with_invocation`](Self::invoke_tool_with_invocation)
+    /// for new code, which also supplies tool-call id and trace context to the
+    /// handler.
     pub async fn invoke_tool(&self, name: &str, arguments: &Value) -> Result<ToolResultObject> {
         let state = self.state.read().await;
         let registered = state
@@ -717,12 +782,51 @@ impl Session {
             .get(name)
             .ok_or_else(|| CopilotError::ToolNotFound(name.to_string()))?;
 
+        if let Some(handler) = registered.invocation_handler.as_ref() {
+            let invocation = crate::types::ToolInvocation {
+                session_id: self.session_id.clone(),
+                tool_call_id: String::new(),
+                tool_name: name.to_string(),
+                arguments: Some(arguments.clone()),
+                traceparent: None,
+                tracestate: None,
+            };
+            return Ok(handler(arguments, &invocation));
+        }
+
         let handler = registered
             .handler
             .as_ref()
             .ok_or_else(|| CopilotError::ToolError(format!("No handler for tool: {}", name)))?;
 
         Ok(handler(name, arguments))
+    }
+
+    /// Invoke a tool handler with full invocation metadata (tool-call id,
+    /// W3C Trace Context). Falls back to the legacy `(name, arguments)`
+    /// handler shape when only that is registered.
+    pub async fn invoke_tool_with_invocation(
+        &self,
+        invocation: &crate::types::ToolInvocation,
+    ) -> Result<ToolResultObject> {
+        let state = self.state.read().await;
+        let registered = state
+            .tools
+            .get(invocation.tool_name.as_str())
+            .ok_or_else(|| CopilotError::ToolNotFound(invocation.tool_name.clone()))?;
+
+        let empty = Value::Object(serde_json::Map::new());
+        let args = invocation.arguments.as_ref().unwrap_or(&empty);
+
+        if let Some(handler) = registered.invocation_handler.as_ref() {
+            return Ok(handler(args, invocation));
+        }
+
+        let handler = registered.handler.as_ref().ok_or_else(|| {
+            CopilotError::ToolError(format!("No handler for tool: {}", invocation.tool_name))
+        })?;
+
+        Ok(handler(&invocation.tool_name, args))
     }
 
     // =========================================================================
@@ -810,6 +914,22 @@ impl Session {
     }
 
     // =========================================================================
+    // Trace context
+    // =========================================================================
+
+    /// Register the provider used to obtain the current W3C Trace Context for
+    /// this session. Called by [`Client`](crate::Client) immediately after
+    /// session construction when `ClientOptions::on_get_trace_context` is set,
+    /// mirroring nodejs's `Session` constructor (`traceContextProvider`).
+    pub(crate) async fn set_trace_context_provider(
+        &self,
+        provider: crate::trace::TraceContextProvider,
+    ) {
+        let mut state = self.state.write().await;
+        state.trace_context_provider = Some(provider);
+    }
+
+    // =========================================================================
     // Capabilities
     // =========================================================================
 
@@ -858,6 +978,16 @@ impl Session {
         state.elicitation_handler = Some(Arc::new(handler));
     }
 
+    /// Register an already-constructed elicitation handler.
+    ///
+    /// Used internally by [`Client`](crate::Client) to wire
+    /// [`SessionCallbacks::on_elicitation`](crate::SessionCallbacks::on_elicitation)
+    /// at config time, immediately after session construction.
+    pub(crate) async fn register_elicitation_handler_arc(&self, handler: ElicitationHandler) {
+        let mut state = self.state.write().await;
+        state.elicitation_handler = Some(handler);
+    }
+
     /// Register a handler invoked when the agent requests to exit plan mode.
     pub async fn register_exit_plan_mode_handler<F>(&self, handler: F)
     where
@@ -867,6 +997,16 @@ impl Session {
         state.exit_plan_mode_handler = Some(Arc::new(handler));
     }
 
+    /// Register an already-constructed exit-plan-mode handler.
+    ///
+    /// Used internally by [`Client`](crate::Client) to wire
+    /// [`SessionCallbacks::on_exit_plan_mode`](crate::SessionCallbacks::on_exit_plan_mode)
+    /// at config time, immediately after session construction.
+    pub(crate) async fn register_exit_plan_mode_handler_arc(&self, handler: ExitPlanModeHandler) {
+        let mut state = self.state.write().await;
+        state.exit_plan_mode_handler = Some(handler);
+    }
+
     /// Register a handler invoked when the agent requests an auto-mode switch.
     pub async fn register_auto_mode_switch_handler<F>(&self, handler: F)
     where
@@ -874,6 +1014,19 @@ impl Session {
     {
         let mut state = self.state.write().await;
         state.auto_mode_switch_handler = Some(Arc::new(handler));
+    }
+
+    /// Register an already-constructed auto-mode-switch handler.
+    ///
+    /// Used internally by [`Client`](crate::Client) to wire
+    /// [`SessionCallbacks::on_auto_mode_switch`](crate::SessionCallbacks::on_auto_mode_switch)
+    /// at config time, immediately after session construction.
+    pub(crate) async fn register_auto_mode_switch_handler_arc(
+        &self,
+        handler: AutoModeSwitchHandler,
+    ) {
+        let mut state = self.state.write().await;
+        state.auto_mode_switch_handler = Some(handler);
     }
 
     // =========================================================================

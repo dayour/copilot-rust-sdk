@@ -42,6 +42,7 @@ fn divide(a: i32, b: i32) -> i32 {
             display_name: "sample.rs".to_string(),
         }]),
         mode: None,
+        ..Default::default()
     };
 
     println!("Sending with attachment: {}\n", sample_file.display());

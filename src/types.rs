@@ -9,6 +9,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::error::CopilotError;
+use crate::session::{
+    AutoModeSwitchHandler, ElicitationHandler, ExitPlanModeHandler, ToolHandler,
+    ToolHandlerWithInvocation,
+};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -288,6 +292,12 @@ pub struct ToolInvocation {
     pub tool_name: String,
     #[serde(default)]
     pub arguments: Option<serde_json::Value>,
+    /// W3C Trace Context `traceparent` from the CLI's `execute_tool` span.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+    /// W3C Trace Context `tracestate` from the CLI's `execute_tool` span.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
 }
 
 impl ToolInvocation {
@@ -1953,6 +1963,75 @@ impl std::fmt::Debug for SessionHooks {
 // Session Configuration
 // =============================================================================
 
+/// Config-time handler registrations for a session.
+///
+/// These are wired automatically by [`Client::create_session`](crate::Client::create_session)
+/// / [`Client::resume_session`](crate::Client::resume_session) immediately after
+/// the local [`Session`](crate::Session) object is constructed — the earliest
+/// point at which registration is physically possible, closing the race where
+/// the CLI could dispatch an elicitation, exit-plan-mode, auto-mode-switch, or
+/// tool-invocation request before the application got a chance to call the
+/// corresponding post-create `Session::register_*` method.
+///
+/// This mirrors nodejs's `SessionConfig` callback fields, which are evaluated
+/// before `session.create`/`session.resume` returns.
+///
+/// All fields are additive: the existing post-create `Session::register_*`
+/// methods keep working unchanged and simply overwrite whatever was set here.
+#[derive(Clone, Default)]
+pub struct SessionCallbacks {
+    /// Handler invoked when the server dispatches an elicitation request.
+    /// See [`Session::register_elicitation_handler`](crate::Session::register_elicitation_handler).
+    pub on_elicitation: Option<ElicitationHandler>,
+    /// Handler invoked when the agent requests to exit plan mode.
+    /// See [`Session::register_exit_plan_mode_handler`](crate::Session::register_exit_plan_mode_handler).
+    pub on_exit_plan_mode: Option<ExitPlanModeHandler>,
+    /// Handler invoked when the agent requests an auto-mode switch after a rate limit.
+    /// See [`Session::register_auto_mode_switch_handler`](crate::Session::register_auto_mode_switch_handler).
+    pub on_auto_mode_switch: Option<AutoModeSwitchHandler>,
+    /// Tool execution handlers, keyed by tool name, matched against the
+    /// declarations in `SessionConfig::tools` / `ResumeSessionConfig::tools`.
+    /// See [`Session::register_tool_with_handler`](crate::Session::register_tool_with_handler).
+    pub tool_handlers: HashMap<String, ToolHandler>,
+    /// Invocation-aware tool execution handlers (receive tool-call id and
+    /// trace context), keyed by tool name. Takes precedence over
+    /// `tool_handlers` for the same tool name. See
+    /// [`Session::register_tool_with_invocation_handler`](crate::Session::register_tool_with_invocation_handler).
+    pub tool_invocation_handlers: HashMap<String, ToolHandlerWithInvocation>,
+}
+
+impl SessionCallbacks {
+    /// Returns true if any callback or tool handler is registered.
+    pub fn has_any(&self) -> bool {
+        self.on_elicitation.is_some()
+            || self.on_exit_plan_mode.is_some()
+            || self.on_auto_mode_switch.is_some()
+            || !self.tool_handlers.is_empty()
+            || !self.tool_invocation_handlers.is_empty()
+    }
+}
+
+impl std::fmt::Debug for SessionCallbacks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionCallbacks")
+            .field("on_elicitation", &self.on_elicitation.is_some())
+            .field("on_exit_plan_mode", &self.on_exit_plan_mode.is_some())
+            .field(
+                "on_auto_mode_switch",
+                &self.on_auto_mode_switch.is_some(),
+            )
+            .field(
+                "tool_handlers",
+                &self.tool_handlers.keys().collect::<Vec<_>>(),
+            )
+            .field(
+                "tool_invocation_handlers",
+                &self.tool_invocation_handlers.keys().collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
 // =============================================================================
 // Session Capabilities (host-reported)
 // =============================================================================
@@ -2549,6 +2628,14 @@ pub struct SessionConfig {
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
 
+    /// Config-time handler registrations (elicitation, exit-plan-mode,
+    /// auto-mode-switch, per-tool handlers). Wired onto the [`Session`](crate::Session)
+    /// immediately after creation, before `create_session` returns, closing the
+    /// race window that exists when registering handlers via the post-create
+    /// `Session::register_*` methods.
+    #[serde(skip)]
+    pub callbacks: Option<SessionCallbacks>,
+
     /// If true and provider/model not explicitly set, load from `COPILOT_SDK_BYOK_*` env vars.
     ///
     /// Default: false (explicit configuration preferred over environment variables)
@@ -2788,6 +2875,12 @@ pub struct ResumeSessionConfig {
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
 
+    /// Config-time handler registrations (elicitation, exit-plan-mode,
+    /// auto-mode-switch, per-tool handlers). Wired onto the [`Session`](crate::Session)
+    /// immediately after resume, before `resume_session` returns.
+    #[serde(skip)]
+    pub callbacks: Option<SessionCallbacks>,
+
     // =========================================================================
     // Tool filtering
     // =========================================================================
@@ -2970,16 +3063,26 @@ pub struct MessageOptions {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<UserMessageAttachment>>,
+    /// Message delivery mode: `"enqueue"` (default) or `"immediate"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The UI mode the agent was in when this message was sent (for example
+    /// `"plan"` or `"autopilot"`). Defaults to the session's current mode when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_mode: Option<String>,
+    /// Custom HTTP headers to include in outbound model requests for this turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_headers: Option<HashMap<String, String>>,
+    /// If provided, this is shown in the timeline instead of `prompt`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_prompt: Option<String>,
 }
 
 impl From<&str> for MessageOptions {
     fn from(prompt: &str) -> Self {
         Self {
             prompt: prompt.to_string(),
-            attachments: None,
-            mode: None,
+            ..Default::default()
         }
     }
 }
@@ -2988,8 +3091,7 @@ impl From<String> for MessageOptions {
     fn from(prompt: String) -> Self {
         Self {
             prompt,
-            attachments: None,
-            mode: None,
+            ..Default::default()
         }
     }
 }

@@ -191,8 +191,30 @@ async fn handle_tool_call(
         }));
     }
 
+    // Build invocation metadata (tool-call id, W3C Trace Context) from
+    // whatever the CLI supplied, mirroring nodejs's `ToolInvocation`. Fields
+    // are optional on the wire, so this degrades gracefully when absent.
+    let invocation = crate::types::ToolInvocation {
+        session_id: session_id.to_string(),
+        tool_call_id: params
+            .get("toolCallId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        tool_name: tool_name.to_string(),
+        arguments: Some(arguments.clone()),
+        traceparent: params
+            .get("traceparent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        tracestate: params
+            .get("tracestate")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    };
+
     // Invoke the tool handler
-    match session.invoke_tool(tool_name, &arguments).await {
+    match session.invoke_tool_with_invocation(&invocation).await {
         Ok(result) => Ok(json!({ "result": result })),
         Err(e) => Ok(json!({
             "result": {
@@ -790,6 +812,60 @@ fn extract_transform_callbacks(
         .collect()
 }
 
+/// Applies config-time handler registrations (elicitation, exit-plan-mode,
+/// auto-mode-switch, per-tool handlers) onto a freshly constructed session.
+///
+/// Called immediately after the local [`Session`] object is built — the
+/// earliest point at which registration is physically possible — so the CLI
+/// can never dispatch a request that races ahead of the corresponding
+/// post-create `Session::register_*` call. Mirrors nodejs's `SessionConfig`
+/// callback fields, which are evaluated before `session.create`/`session.resume`
+/// resolve.
+///
+/// Tool declarations are always registered locally (with `None` handler when
+/// none is supplied) so `Session::list_tools`/`get_tool` reflect exactly what
+/// was advertised on the wire, regardless of whether `callbacks` is set.
+async fn apply_session_callbacks(
+    session: &Session,
+    callbacks: Option<crate::types::SessionCallbacks>,
+    tools: &[crate::types::Tool],
+) {
+    let mut tool_handlers = callbacks
+        .as_ref()
+        .map(|c| c.tool_handlers.clone())
+        .unwrap_or_default();
+    let mut invocation_handlers = callbacks
+        .as_ref()
+        .map(|c| c.tool_invocation_handlers.clone())
+        .unwrap_or_default();
+
+    for tool in tools.iter().cloned() {
+        if let Some(handler) = invocation_handlers.remove(&tool.name) {
+            session
+                .register_tool_with_invocation_handler(tool, Some(handler))
+                .await;
+            continue;
+        }
+        let handler = tool_handlers.remove(&tool.name);
+        session.register_tool_with_handler(tool, handler).await;
+    }
+
+    let Some(callbacks) = callbacks else {
+        return;
+    };
+    if let Some(handler) = callbacks.on_elicitation {
+        session.register_elicitation_handler_arc(handler).await;
+    }
+    if let Some(handler) = callbacks.on_exit_plan_mode {
+        session.register_exit_plan_mode_handler_arc(handler).await;
+    }
+    if let Some(handler) = callbacks.on_auto_mode_switch {
+        session
+            .register_auto_mode_switch_handler_arc(handler)
+            .await;
+    }
+}
+
 fn parse_cli_url(url: &str) -> Result<(String, u16)> {
     let mut s = url.trim();
     if let Some((_, rest)) = s.split_once("://") {
@@ -1330,6 +1406,16 @@ impl Client {
             session.register_transform_callbacks(transforms).await;
         }
 
+        // Register config-time elicitation/exit-plan-mode/auto-mode-switch and
+        // per-tool handlers, and record the declared tools locally.
+        apply_session_callbacks(&session, config.callbacks.take(), &config.tools).await;
+
+        // Register the trace context provider so `session.send` carries the
+        // same W3C Trace Context as `session.create`/`session.resume`.
+        if let Some(provider) = self.options.on_get_trace_context.clone() {
+            session.set_trace_context_provider(provider).await;
+        }
+
         // Apply post-create session options. If the patch fails, disconnect the
         // orphaned runtime session rather than leaking it with permissive
         // defaults, then surface the original error.
@@ -1429,6 +1515,16 @@ impl Client {
         let transforms = extract_transform_callbacks(config.system_message.as_ref());
         if !transforms.is_empty() {
             session.register_transform_callbacks(transforms).await;
+        }
+
+        // Register config-time elicitation/exit-plan-mode/auto-mode-switch and
+        // per-tool handlers, and record the declared tools locally.
+        apply_session_callbacks(&session, config.callbacks.take(), &config.tools).await;
+
+        // Register the trace context provider so `session.send` carries the
+        // same W3C Trace Context as `session.create`/`session.resume`.
+        if let Some(provider) = self.options.on_get_trace_context.clone() {
+            session.set_trace_context_provider(provider).await;
         }
 
         // Record canvas instances the host restored alongside the session.
