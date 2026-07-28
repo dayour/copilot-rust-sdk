@@ -11,3 +11,12 @@ Cargo.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Build output in nested crates (root-anchored /target/ missed these)
+target/
+
+# Generated docs site (no authored sources tracked here)
+website/
+node_modules/
+.docusaurus/
+dist/

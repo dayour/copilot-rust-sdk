@@ -1,0 +1,12 @@
+[package]
+name = "copilot-sdk-codegen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Detached from the parent crate: this is a dev-only tool and must never be
+# part of the published `copilot-sdk` package or its build graph.
+[workspace]
+
+[dependencies]
+serde_json = "1"

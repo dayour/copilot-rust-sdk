@@ -1,0 +1,25 @@
+{
+  "file": "api.schema.json",
+  "title": "CopilotApi",
+  "description": "Describes all JSON-RPC methods exposed by the Copilot CLI server. SDK codegen tools consume this to produce typed client wrappers.",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2019-09/schema",
+  "source": {
+    "npmPackage": "@github/copilot",
+    "npmVersion": "1.0.56-1",
+    "pathInPackage": "schemas/api.schema.json"
+  },
+  "sdkProtocolVersion": 3,
+  "methodCounts": {
+    "server": 38,
+    "session": 143,
+    "clientSession": 15,
+    "total": 196
+  },
+  "definitions": 597,
+  "regenerate": "cd codegen && cargo run",
+  "notes": [
+    "This file is vendored verbatim so the build is reproducible without a sibling npm install.",
+    "Do not hand-edit. Re-vendor from the pinned @github/copilot version when bumping the protocol.",
+    "src/generated/ is produced from this file and must never be hand-edited."
+  ]
+}

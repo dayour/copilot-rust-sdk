@@ -1,0 +1,206 @@
+# RPC parity allowlist - schema methods this crate does not yet bind.
+#
+# Generated from schemas/api.schema.json. Enforced by tests/rpc_parity.rs.
+#
+# A method counts as implemented if the crate either INVOKES it (outbound)
+# or SERVES it as a reverse-RPC handler (inbound match arm).
+#
+# Deleting a line after implementing its binding is always allowed and is
+# how parity progress is locked in. Adding a line means a previously
+# working binding was removed and requires justification.
+#
+#   server           5/38  bound
+#   session         31/143 bound
+#   clientSession   15/15  bound
+#   TOTAL           51/196 bound
+
+# --- agentRegistry ---
+agentRegistry.spawn
+# --- (root) ---
+connect
+# --- mcp.config ---
+mcp.config.add
+mcp.config.disable
+mcp.config.enable
+mcp.config.list
+mcp.config.reload
+mcp.config.remove
+mcp.config.update
+# --- mcp ---
+mcp.discover
+# --- secrets ---
+secrets.addFilterValues
+# --- session.agent ---
+session.agent.reload
+# --- session.auth ---
+session.auth.getStatus
+session.auth.setCredentials
+# --- session.canvas.action ---
+session.canvas.action.invoke
+# --- session.canvas ---
+session.canvas.close
+session.canvas.list
+session.canvas.listOpen
+session.canvas.open
+# --- session.commands ---
+session.commands.enqueue
+session.commands.execute
+session.commands.invoke
+session.commands.list
+session.commands.respondToQueuedCommand
+# --- session.eventLog ---
+session.eventLog.read
+session.eventLog.registerInterest
+session.eventLog.releaseInterest
+session.eventLog.tail
+# --- session.extensions ---
+session.extensions.disable
+session.extensions.enable
+session.extensions.list
+session.extensions.reload
+# --- session.history ---
+session.history.abortManualCompaction
+session.history.cancelBackgroundCompaction
+session.history.summarizeForHandoff
+session.history.truncate
+# --- session.instructions ---
+session.instructions.getSources
+# --- session.mcp.apps ---
+session.mcp.apps.callTool
+session.mcp.apps.diagnose
+session.mcp.apps.getHostContext
+session.mcp.apps.listTools
+session.mcp.apps.readResource
+session.mcp.apps.setHostContext
+# --- session.mcp ---
+session.mcp.cancelSamplingExecution
+session.mcp.disable
+session.mcp.enable
+session.mcp.executeSampling
+session.mcp.list
+# --- session.mcp.oauth ---
+session.mcp.oauth.login
+# --- session.mcp ---
+session.mcp.reload
+session.mcp.removeGitHub
+session.mcp.setEnvValueMode
+# --- session.metadata ---
+session.metadata.contextInfo
+session.metadata.isProcessing
+session.metadata.recomputeContextTokens
+session.metadata.recordContextChange
+session.metadata.setWorkingDirectory
+session.metadata.snapshot
+# --- session.model ---
+session.model.list
+session.model.setReasoningEffort
+# --- session.name ---
+session.name.get
+session.name.set
+session.name.setAuto
+# --- session.permissions ---
+session.permissions.configure
+# --- session.permissions.folderTrust ---
+session.permissions.folderTrust.addTrusted
+session.permissions.folderTrust.isTrusted
+# --- session.permissions ---
+session.permissions.getAllowAll
+# --- session.permissions.locations ---
+session.permissions.locations.addToolApproval
+session.permissions.locations.apply
+session.permissions.locations.resolve
+# --- session.permissions ---
+session.permissions.modifyRules
+session.permissions.notifyPromptShown
+# --- session.permissions.paths ---
+session.permissions.paths.add
+session.permissions.paths.isPathWithinAllowedDirectories
+session.permissions.paths.isPathWithinWorkspace
+session.permissions.paths.list
+session.permissions.paths.updatePrimary
+# --- session.permissions ---
+session.permissions.pendingRequests
+session.permissions.resetSessionApprovals
+session.permissions.setAllowAll
+session.permissions.setApproveAll
+session.permissions.setRequired
+# --- session.permissions.urls ---
+session.permissions.urls.setUnrestrictedMode
+# --- session.plugins ---
+session.plugins.list
+# --- session.queue ---
+session.queue.clear
+session.queue.pendingItems
+session.queue.removeMostRecent
+# --- session.remote ---
+session.remote.disable
+session.remote.enable
+session.remote.notifySteerableChanged
+# --- session.schedule ---
+session.schedule.list
+session.schedule.stop
+# --- session.skills ---
+session.skills.disable
+session.skills.enable
+session.skills.ensureLoaded
+session.skills.getInvoked
+session.skills.list
+session.skills.reload
+# --- session ---
+session.suspend
+# --- session.tasks ---
+session.tasks.cancel
+session.tasks.getCurrentPromotable
+session.tasks.getProgress
+session.tasks.list
+session.tasks.promoteCurrentToBackground
+session.tasks.promoteToBackground
+session.tasks.refresh
+session.tasks.remove
+session.tasks.sendMessage
+session.tasks.startAgent
+session.tasks.waitForPending
+# --- session.telemetry ---
+session.telemetry.setFeatureOverrides
+# --- session.tools ---
+session.tools.getCurrentMetadata
+session.tools.initializeAndValidate
+# --- session.ui ---
+session.ui.handlePendingSampling
+session.ui.handlePendingUserInput
+session.ui.registerDirectAutoModeSwitchHandler
+session.ui.unregisterDirectAutoModeSwitchHandler
+# --- session.usage ---
+session.usage.getMetrics
+# --- session.workspaces ---
+session.workspaces.diff
+session.workspaces.getWorkspace
+session.workspaces.listCheckpoints
+session.workspaces.readCheckpoint
+session.workspaces.saveLargePaste
+# --- sessions ---
+sessions.bulkDelete
+sessions.checkInUse
+sessions.close
+sessions.connect
+sessions.enrichMetadata
+sessions.findByPrefix
+sessions.findByTaskId
+sessions.fork
+sessions.getEventFilePath
+sessions.getLastForContext
+sessions.getPersistedRemoteSteerable
+sessions.getSizes
+sessions.list
+sessions.loadDeferredRepoHooks
+sessions.pruneOld
+sessions.releaseLock
+sessions.reloadPluginHooks
+sessions.save
+sessions.setAdditionalPlugins
+# --- skills.config ---
+skills.config.setDisabledSkills
+# --- skills ---
+skills.discover
+# --- user.settings ---
+user.settings.reload

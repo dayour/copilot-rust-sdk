@@ -35,51 +35,106 @@
 //! }
 //! ```
 
+pub mod canvas;
 pub mod client;
 pub mod error;
 pub mod events;
+pub mod generated;
 pub mod jsonrpc;
+pub mod lsp;
 pub mod process;
+pub mod rpc;
 pub mod session;
+pub mod session_fs;
 pub mod tools;
+pub mod toolset;
+pub mod trace;
 pub mod transport;
 pub mod types;
 
 // Re-export tool utilities
-pub use tools::define_tool;
+pub use tools::{convert_mcp_call_tool_result, define_tool};
+
+// Re-export canvas declaration model
+pub use canvas::{
+    CanvasActionDeclaration, CanvasBuilder, CanvasCloseRequest, CanvasDeclaration, CanvasError,
+    CanvasHandler, CanvasInstanceAvailability, CanvasInvokeActionRequest, CanvasJsonSchema,
+    CanvasOpenRequest, CanvasOpenResult, OpenCanvasInstance,
+};
+
+// Re-export tool-set builder
+pub use toolset::{BuiltInTools, InvalidToolName, ToolSet};
+
+// Re-export client-provided session filesystem
+pub use session_fs::{
+    SessionFsCapabilities, SessionFsConfig, SessionFsConventions, SessionFsDirEntry,
+    SessionFsEntryType, SessionFsError, SessionFsErrorCode, SessionFsFileInfo, SessionFsFuture,
+    SessionFsProvider, SessionFsResult, SessionFsSqliteParams, SessionFsSqliteProvider,
+    SessionFsSqliteQueryResult, SessionFsSqliteQueryType,
+};
+
+// Re-export trace-context helpers
+pub use trace::{get_trace_context, TraceContext, TraceContextFuture, TraceContextProvider};
 
 // Re-export main types at crate root for convenience
 pub use error::{CopilotError, Result};
 pub use types::{
-    // Session lifecycle event type constants
+    // Free functions / helpers
+    approve_all,
+    default_join_session_permission_handler,
     session_lifecycle_event_types,
+    system_message_sections,
     // Config types
     AgentInfo,
     // Enums
     AttachmentType,
+    AutoModeSwitchRequest,
+    AutoModeSwitchResponse,
     AzureOptions,
     ClientOptions,
+    // Cloud / remote session types
+    CloudSessionOptions,
+    CloudSessionRepository,
+    // Command types
+    CommandContext,
+    CommandDeclaration,
     ConnectionState,
     CustomAgentConfig,
+    DefaultAgentConfig,
+    // UI elicitation types
+    ElicitationContext,
+    ElicitationMode,
+    ElicitationParams,
+    ElicitationResult,
     // Hook types
     ErrorOccurredHandler,
     ErrorOccurredHookInput,
     ErrorOccurredHookOutput,
+    ExitPlanModeRequest,
+    ExitPlanModeResult,
+    ExtensionInfo,
     FleetStartOptions,
     // Response types
     GetAuthStatusResponse,
     GetForegroundSessionResponse,
     GetStatusResponse,
     InfiniteSessionConfig,
+    LargeToolOutputConfig,
     LogLevel,
     LogOptions,
     LogResult,
+    LspInitializeOptions,
     McpLocalServerConfig,
     McpRemoteServerConfig,
     McpServerConfig,
     MessageOptions,
     ModelBilling,
     ModelCapabilities,
+    // Model capability override types
+    ModelCapabilitiesOverride,
+    ModelCapabilitiesOverrideLimits,
+    ModelCapabilitiesOverrideLimitsVision,
+    ModelCapabilitiesOverrideSupports,
     ModelInfo,
     ModelLimits,
     ModelPolicy,
@@ -100,16 +155,23 @@ pub use types::{
     // Quota types
     QuotaResult,
     QuotaSnapshot,
+    ReasoningSummary,
+    RemoteSessionMode,
     ResumeSessionConfig,
+    // System message section override types
+    SectionOverride,
+    SectionOverrideAction,
     // Selection types
     SelectionAttachment,
     SelectionPosition,
     SelectionRange,
+    SessionCapabilities,
     SessionConfig,
     SessionEndHandler,
     SessionEndHookInput,
     SessionEndHookOutput,
     SessionHooks,
+    SessionInstalledPlugin,
     // Session lifecycle types
     SessionLifecycleEvent,
     SessionLifecycleEventMetadata,
@@ -119,6 +181,7 @@ pub use types::{
     SessionStartHandler,
     SessionStartHookInput,
     SessionStartHookOutput,
+    SessionUpdateOptions,
     SetForegroundSessionResponse,
     SetModelOptions,
     // Shell types
@@ -126,8 +189,10 @@ pub use types::{
     ShellExecResult,
     ShellSignal,
     StopError,
+    StorageMode,
     SystemMessageConfig,
     SystemMessageMode,
+    SystemMessageSection,
     // Telemetry types
     TelemetryConfig,
     // Tool types
@@ -138,6 +203,8 @@ pub use types::{
     ToolResult,
     ToolResultObject,
     ToolsListResult,
+    UiCapabilities,
+    UiInputOptions,
     // User input types
     UserInputInvocation,
     UserInputRequest,
@@ -159,24 +226,82 @@ pub use events::{
     AssistantIntentData,
     AssistantMessageData,
     AssistantMessageDeltaData,
+    AssistantMessageStartData,
     AssistantReasoningData,
     AssistantReasoningDeltaData,
+    AssistantStreamingDeltaData,
     AssistantTurnEndData,
     AssistantTurnStartData,
     AssistantUsageData,
+    AutoModeSwitchCompletedData,
+    AutopilotObjectiveChangedData,
+    AutopilotObjectiveOperation,
+    AutopilotObjectiveStatus,
+    BackgroundTasksChangedData,
+    CanvasOpenedData,
+    CanvasRegistryChangedData,
+    CapabilitiesChangedData,
+    CapabilitiesChangedUi,
+    ChangedCommand,
+    CommandCompletedData,
+    CommandQueuedData,
+    CommandsChangedData,
     CompactionTokensUsed,
     CustomAgentCompletedData,
+    CustomAgentDeselectedData,
     CustomAgentFailedData,
     CustomAgentSelectedData,
     CustomAgentStartedData,
+    CustomAgentsUpdatedData,
+    CustomNotificationData,
+    ElicitationCompletedAction,
+    ElicitationCompletedData,
+    ExitPlanModeAction,
+    ExitPlanModeCompletedData,
+    ExtensionSource,
+    ExtensionStatus,
+    ExtensionsLoadedData,
+    ExternalToolCompletedData,
     HandoffSourceType,
     HookEndData,
     HookError,
+    HookProgressData,
     HookStartData,
+    LoadedExtension,
+    LoadedMcpServer,
+    LoadedSkill,
+    McpAppToolCallCompleteData,
+    McpAppToolCallError,
+    McpAppToolMeta,
+    McpAppToolMetaUi,
+    McpOauthCompletedData,
+    McpOauthRequiredData,
+    McpOauthStaticClientConfig,
+    McpServerSource,
+    McpServerStatus,
+    McpServerStatusChangedData,
+    McpServerTransport,
+    McpServersLoadedData,
+    ModeChangedData,
+    ModelCallFailureData,
+    ModelCallFailureSource,
     PendingMessagesModifiedData,
+    PermissionCompletedData,
+    PermissionResult,
+    PermissionRule,
+    PermissionsChangedData,
+    PlanChangedData,
+    PlanChangedOperation,
     // Main event types
     RawSessionEvent,
+    RegisteredCanvas,
+    RegisteredCanvasAction,
+    RemoteSteerableChangedData,
     RepositoryInfo,
+    SamplingCompletedData,
+    SamplingRequestedData,
+    ScheduleCancelledData,
+    ScheduleCreatedData,
     SessionCompactionCompleteData,
     SessionCompactionStartData,
     SessionErrorData,
@@ -192,12 +317,19 @@ pub use events::{
     SessionStartData,
     SessionTruncationData,
     SessionUsageInfoData,
+    SessionWarningData,
     ShutdownCodeChanges,
     ShutdownType,
     SkillInvokedData,
+    SkillSource,
+    SkillsLoadedData,
     SystemMessageEventData,
     SystemMessageMetadata,
     SystemMessageRole,
+    SystemNotification,
+    SystemNotificationData,
+    TaskCompleteData,
+    TitleChangedData,
     ToolExecutionCompleteData,
     ToolExecutionError,
     ToolExecutionPartialResultData,
@@ -206,8 +338,16 @@ pub use events::{
     ToolRequestItem,
     ToolResultContent,
     ToolUserRequestedData,
+    ToolsUpdatedData,
+    UpdatedCustomAgent,
+    UserInputCompletedData,
+    UserInputRequestedData,
     UserMessageAttachmentItem,
     UserMessageData,
+    WorkingDirectoryContextData,
+    WorkingDirectoryHostType,
+    WorkspaceFileChangedData,
+    WorkspaceFileChangedOperation,
 };
 
 // Re-export transport types
@@ -219,6 +359,17 @@ pub use jsonrpc::{
     RequestHandler,
 };
 
+// Re-export LSP types
+pub use lsp::{
+    CanonicalName, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentStore, DocumentSymbol, DocumentSymbolParams, Hover,
+    InitializeParams, InitializeResult, Location, LspServer, LspServerConfig, Position, Range,
+    RustSemanticProvider, SemanticId, SemanticProvider, ServerCapabilities, ServerInfo, StrongName,
+    SymbolInformation, SymbolKind, TextDocumentContentChangeEvent, TextDocumentIdentifier,
+    TextDocumentItem, VersionedTextDocumentIdentifier, WorkspaceFolder, WorkspaceSymbolParams,
+    LSP_PROTOCOL_VERSION, SEMANTIC_ID_PREFIX, SEMANTIC_SCHEMA_VERSION,
+};
+
 // Re-export process types
 pub use process::{
     find_copilot_cli, find_executable, find_node, is_node_script, CopilotProcess, ProcessOptions,
@@ -226,7 +377,8 @@ pub use process::{
 
 // Re-export session types
 pub use session::{
-    EventHandler, EventSubscription, InvokeFuture, PermissionHandler, RegisteredTool, Session,
+    AutoModeSwitchHandler, CommandHandler, ElicitationHandler, EventHandler, EventSubscription,
+    ExitPlanModeHandler, InvokeFuture, PermissionHandler, RegisteredTool, Session, SessionUi,
     ToolHandler, UserInputHandler,
 };
 

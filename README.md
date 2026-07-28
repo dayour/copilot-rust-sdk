@@ -175,6 +175,28 @@ session.start_fleet(Some(FleetStartOptions {
 })).await?;
 ```
 
+### Rust-native LSP
+
+The crate includes a typed, Content-Length framed LSP 3.17 server with deterministic
+Rust declaration symbols:
+
+```rust,no_run
+use copilot_sdk::LspServer;
+
+#[tokio::main]
+async fn main() -> copilot_sdk::Result<()> {
+    let server = LspServer::new();
+    server
+        .serve(tokio::io::stdin(), tokio::io::stdout())
+        .await?;
+    Ok(())
+}
+```
+
+Semantic symbols use canonical strong names and stable IDs prefixed with
+`rust-lsp-semantic-v1:`. A Copilot session can provide matching identity and workspace
+metadata through `session.lsp_server_config()`.
+
 ### Client Utilities
 
 ```rust
@@ -293,6 +315,7 @@ Set `COPILOT_SDK_RUST_SNAPSHOT_DIR` or `UPSTREAM_SNAPSHOTS` to point at `copilot
 - **SDK Protocol Version**: 3 (minimum: 2)
 - **Transport**: stdio (spawned CLI) and TCP (spawned or external server)
 - **JSON-RPC**: v2.0 with Content-Length framing
+- **LSP**: 3.17 server with full document synchronization and semantic symbols
 
 ## Feature Parity
 
@@ -313,6 +336,7 @@ This port targets feature parity with the official SDKs (Go, TypeScript, Python,
 | Shell operations (exec/kill) | ✅ |
 | Workspace file operations | ✅ |
 | Fleet management | ✅ |
+| Rust-native LSP 3.17 server and semantic symbol IDs | ✅ |
 | Session logging | ✅ |
 | BYOK (custom providers) | ✅ |
 | OpenTelemetry configuration | ✅ |

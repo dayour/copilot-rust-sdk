@@ -7,15 +7,16 @@
 
 use crate::error::{CopilotError, Result};
 use crate::events::SessionEvent;
-use crate::jsonrpc::{StdioJsonRpcClient, TcpJsonRpcClient};
+use crate::jsonrpc::{JsonRpcClient, StdioJsonRpcClient, TcpJsonRpcClient};
 use crate::process::{CopilotProcess, ProcessOptions};
 use crate::session::Session;
+use crate::transport::ParentStdioTransport;
 use crate::types::{
-    ClientOptions, ConnectionState, GetAuthStatusResponse, GetForegroundSessionResponse,
-    GetStatusResponse, LogLevel, ModelInfo, PingResponse, ProviderConfig, QuotaResult,
-    ResumeSessionConfig, SessionConfig, SessionLifecycleEvent, SessionMetadata,
-    SetForegroundSessionResponse, StopError, TelemetryConfig, ToolsListResult,
-    MIN_PROTOCOL_VERSION, SDK_PROTOCOL_VERSION,
+    ClientOptions, ConnectionKind, ConnectionState, CopilotClientMode, GetAuthStatusResponse,
+    GetForegroundSessionResponse, GetStatusResponse, LogLevel, ModelInfo, PingResponse,
+    ProviderConfig, QuotaResult, ResumeSessionConfig, SessionConfig, SessionHooks,
+    SessionLifecycleEvent, SessionMetadata, SessionUpdateOptions, SetForegroundSessionResponse,
+    StopError, TelemetryConfig, ToolsListResult, MIN_PROTOCOL_VERSION, SDK_PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -347,6 +348,434 @@ async fn handle_hooks_invoke(
     session.handle_hooks_invoke(hook_type, &input).await
 }
 
+/// Handle an inbound `canvas.*` reverse-RPC request from the runtime.
+async fn handle_canvas_request(
+    sessions: &RwLock<HashMap<String, Arc<Session>>>,
+    method: &str,
+    params: &Value,
+) -> Result<Value> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CopilotError::InvalidConfig("Missing sessionId".into()))?;
+
+    let session = sessions
+        .read()
+        .await
+        .get(session_id)
+        .cloned()
+        .ok_or_else(|| {
+            CopilotError::Protocol(format!(
+                "Session not found for canvas request: {session_id}"
+            ))
+        })?;
+
+    let handler = session.canvas_handler().await.ok_or_else(|| {
+        CopilotError::Protocol(
+            "No CanvasHandler installed on this session; call \
+             Session::register_canvas_handler before creating the session."
+                .into(),
+        )
+    })?;
+
+    let canvas_err = |e: crate::canvas::CanvasError| CopilotError::Protocol(e.to_string());
+
+    match method {
+        "canvas.open" => {
+            let req = serde_json::from_value(params.clone())?;
+            let result = handler.on_open(req).map_err(canvas_err)?;
+            Ok(serde_json::to_value(result)?)
+        }
+        "canvas.close" => {
+            let req = serde_json::from_value(params.clone())?;
+            handler.on_close(req).map_err(canvas_err)?;
+            Ok(Value::Null)
+        }
+        "canvas.action.invoke" => {
+            let req = serde_json::from_value(params.clone())?;
+            let result = handler.on_action(req).map_err(canvas_err)?;
+            Ok(result)
+        }
+        _ => Err(CopilotError::Protocol(format!(
+            "Unknown canvas method: {method}"
+        ))),
+    }
+}
+
+/// Handle an inbound `sessionFs.*` reverse-RPC request from the runtime.
+async fn handle_session_fs_request(
+    sessions: &RwLock<HashMap<String, Arc<Session>>>,
+    method: &str,
+    params: &Value,
+) -> Result<Value> {
+    use crate::session_fs::{SessionFsError, SessionFsSqliteParams, SessionFsSqliteQueryType};
+
+    let session_id = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CopilotError::InvalidConfig("Missing sessionId".into()))?;
+
+    let session = sessions
+        .read()
+        .await
+        .get(session_id)
+        .cloned()
+        .ok_or_else(|| {
+            CopilotError::Protocol(format!(
+                "Session not found for sessionFs request: {session_id}"
+            ))
+        })?;
+
+    let provider = session.session_fs_provider().await.ok_or_else(|| {
+        CopilotError::Protocol(
+            "No SessionFsProvider installed on this session; call \
+             Session::register_session_fs_provider before creating the session."
+                .into(),
+        )
+    })?;
+
+    let str_arg = |name: &str| -> Result<String> {
+        params
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| CopilotError::InvalidConfig(format!("Missing {name} in {method}")))
+    };
+    let bool_arg = |name: &str| params.get(name).and_then(|v| v.as_bool()).unwrap_or(false);
+    let mode_arg = || {
+        params
+            .get("mode")
+            .and_then(|v| v.as_u64())
+            .map(|m| m as u32)
+    };
+
+    // Void operations answer `null` on success and a bare `SessionFsError` on failure.
+    fn void_result(outcome: std::result::Result<(), SessionFsError>) -> Result<Value> {
+        match outcome {
+            Ok(()) => Ok(Value::Null),
+            Err(err) => Ok(serde_json::to_value(err)?),
+        }
+    }
+
+    match method {
+        "sessionFs.readFile" => {
+            let path = str_arg("path")?;
+            Ok(match provider.read_file(&path).await {
+                Ok(content) => json!({ "content": content }),
+                Err(err) => json!({ "content": "", "error": err }),
+            })
+        }
+        "sessionFs.writeFile" => {
+            let path = str_arg("path")?;
+            let content = str_arg("content")?;
+            void_result(provider.write_file(&path, &content, mode_arg()).await)
+        }
+        "sessionFs.appendFile" => {
+            let path = str_arg("path")?;
+            let content = str_arg("content")?;
+            void_result(provider.append_file(&path, &content, mode_arg()).await)
+        }
+        "sessionFs.exists" => {
+            let path = str_arg("path")?;
+            let exists = provider.exists(&path).await.unwrap_or(false);
+            Ok(json!({ "exists": exists }))
+        }
+        "sessionFs.stat" => {
+            let path = str_arg("path")?;
+            Ok(match provider.stat(&path).await {
+                Ok(info) => serde_json::to_value(info)?,
+                Err(err) => json!({
+                    "isFile": false,
+                    "isDirectory": false,
+                    "size": 0,
+                    "mtime": "",
+                    "birthtime": "",
+                    "error": err,
+                }),
+            })
+        }
+        "sessionFs.readdir" => {
+            let path = str_arg("path")?;
+            Ok(match provider.readdir(&path).await {
+                Ok(entries) => json!({ "entries": entries }),
+                Err(err) => json!({ "entries": [], "error": err }),
+            })
+        }
+        "sessionFs.readdirWithTypes" => {
+            let path = str_arg("path")?;
+            Ok(match provider.readdir_with_types(&path).await {
+                Ok(entries) => json!({ "entries": entries }),
+                Err(err) => json!({ "entries": [], "error": err }),
+            })
+        }
+        "sessionFs.mkdir" => {
+            let path = str_arg("path")?;
+            void_result(
+                provider
+                    .mkdir(&path, bool_arg("recursive"), mode_arg())
+                    .await,
+            )
+        }
+        "sessionFs.rm" => {
+            let path = str_arg("path")?;
+            void_result(
+                provider
+                    .rm(&path, bool_arg("recursive"), bool_arg("force"))
+                    .await,
+            )
+        }
+        "sessionFs.rename" => {
+            let src = str_arg("src")?;
+            let dest = str_arg("dest")?;
+            void_result(provider.rename(&src, &dest).await)
+        }
+        "sessionFs.sqliteQuery" => {
+            let sqlite = provider.sqlite().ok_or_else(|| {
+                CopilotError::Protocol("SessionFsProvider does not implement SQLite support".into())
+            })?;
+            let query = str_arg("query")?;
+            let query_type: SessionFsSqliteQueryType = serde_json::from_value(
+                params
+                    .get("queryType")
+                    .cloned()
+                    .ok_or_else(|| CopilotError::InvalidConfig("Missing queryType".into()))?,
+            )?;
+            let bind: Option<SessionFsSqliteParams> = params
+                .get("params")
+                .filter(|v| !v.is_null())
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()?;
+
+            Ok(
+                match sqlite.query(query_type, &query, bind.as_ref()).await {
+                    Ok(Some(result)) => serde_json::to_value(result)?,
+                    Ok(None) => json!({ "rows": [], "columns": [], "rowsAffected": 0 }),
+                    Err(err) => json!({
+                        "rows": [],
+                        "columns": [],
+                        "rowsAffected": 0,
+                        "error": err,
+                    }),
+                },
+            )
+        }
+        "sessionFs.sqliteExists" => {
+            let exists = match provider.sqlite() {
+                Some(sqlite) => sqlite.exists().await.unwrap_or(false),
+                None => false,
+            };
+            Ok(json!({ "exists": exists }))
+        }
+        _ => Err(CopilotError::Protocol(format!(
+            "Unknown sessionFs method: {method}"
+        ))),
+    }
+}
+
+/// Handle an inbound `systemMessage.transform` request from the runtime.
+async fn handle_system_message_transform(
+    sessions: &RwLock<HashMap<String, Arc<Session>>>,
+    params: &Value,
+) -> Result<Value> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CopilotError::InvalidConfig("Missing sessionId".into()))?;
+
+    let sections = params
+        .get("sections")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            CopilotError::InvalidConfig("Invalid systemMessage.transform payload".into())
+        })?;
+
+    let session = sessions
+        .read()
+        .await
+        .get(session_id)
+        .cloned()
+        .ok_or_else(|| CopilotError::Protocol(format!("Session not found: {session_id}")))?;
+
+    let input: HashMap<String, String> = sections
+        .iter()
+        .map(|(id, value)| {
+            let content = value
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_string();
+            (id.clone(), content)
+        })
+        .collect();
+
+    let transformed = session.handle_system_message_transform(input).await;
+
+    let out: serde_json::Map<String, Value> = transformed
+        .into_iter()
+        .map(|(id, content)| (id, json!({ "content": content })))
+        .collect();
+
+    Ok(json!({ "sections": out }))
+}
+
+/// Applies wire-level constants and mode defaults to a `session.create` /
+/// `session.resume` payload, mirroring the Node.js client.
+fn apply_wire_session_defaults(
+    params: &mut Value,
+    mode: CopilotClientMode,
+    hooks: Option<&SessionHooks>,
+) {
+    let Some(obj) = params.as_object_mut() else {
+        return;
+    };
+
+    // `hooks` is a capability flag on the wire, not the handler set itself.
+    obj.insert(
+        "hooks".into(),
+        json!(hooks.map(SessionHooks::has_any).unwrap_or(false)),
+    );
+
+    // Constants the runtime expects on every session request.
+    obj.entry("toolFilterPrecedence")
+        .or_insert_with(|| json!("excluded"));
+    obj.entry("envValueMode").or_insert_with(|| json!("direct"));
+    obj.entry("includeSubAgentStreamingEvents")
+        .or_insert_with(|| json!(true));
+
+    if mode != CopilotClientMode::Empty {
+        return;
+    }
+
+    // Empty mode starts from a locked-down baseline; caller values win.
+    for (key, value) in [
+        ("enableSessionTelemetry", json!(false)),
+        ("mcpOAuthTokenStorage", json!("in-memory")),
+        ("skipEmbeddingRetrieval", json!(true)),
+        ("embeddingCacheStorage", json!("in-memory")),
+        ("enableOnDemandInstructionDiscovery", json!(false)),
+        ("enableFileHooks", json!(false)),
+        ("enableHostGitOperations", json!(false)),
+        ("enableSessionStore", json!(false)),
+        ("enableSkills", json!(false)),
+    ] {
+        obj.entry(key).or_insert(value);
+    }
+}
+
+/// Builds the post-create `session.options.update` patch, mirroring the Node.js
+/// `updateSessionOptionsForMode` helper.
+fn session_options_patch_for_mode(
+    config: &SessionConfig,
+    mode: CopilotClientMode,
+) -> SessionUpdateOptions {
+    session_options_patch(
+        mode,
+        config.skip_custom_instructions,
+        config.custom_agents_local_only,
+        config.coauthor_enabled,
+        config.manage_schedule_enabled,
+    )
+}
+
+/// Same as [`session_options_patch_for_mode`], but for `session.resume`.
+fn resume_options_patch_for_mode(
+    config: &ResumeSessionConfig,
+    mode: CopilotClientMode,
+) -> SessionUpdateOptions {
+    session_options_patch(
+        mode,
+        config.skip_custom_instructions,
+        config.custom_agents_local_only,
+        config.coauthor_enabled,
+        config.manage_schedule_enabled,
+    )
+}
+
+fn session_options_patch(
+    mode: CopilotClientMode,
+    skip_custom_instructions: Option<bool>,
+    custom_agents_local_only: Option<bool>,
+    coauthor_enabled: Option<bool>,
+    manage_schedule_enabled: Option<bool>,
+) -> SessionUpdateOptions {
+    if mode == CopilotClientMode::Empty {
+        return SessionUpdateOptions {
+            skip_custom_instructions: Some(skip_custom_instructions.unwrap_or(true)),
+            custom_agents_local_only: Some(custom_agents_local_only.unwrap_or(true)),
+            coauthor_enabled: Some(coauthor_enabled.unwrap_or(false)),
+            manage_schedule_enabled: Some(manage_schedule_enabled.unwrap_or(false)),
+            installed_plugins: Some(Vec::new()),
+            ..Default::default()
+        };
+    }
+
+    SessionUpdateOptions {
+        skip_custom_instructions,
+        custom_agents_local_only,
+        coauthor_enabled,
+        manage_schedule_enabled,
+        ..Default::default()
+    }
+}
+
+/// Applies the empty-mode system message default: remove the environment
+/// context section unless the caller already decided what to do with it.
+fn empty_mode_system_message(
+    supplied: Option<crate::types::SystemMessageConfig>,
+) -> crate::types::SystemMessageConfig {
+    use crate::types::{
+        SectionOverride, SystemMessageConfig, SystemMessageMode, SystemMessageSection,
+    };
+
+    let env_key = SystemMessageSection::EnvironmentContext.id().to_string();
+    let Some(mut supplied) = supplied else {
+        let mut sections = HashMap::new();
+        sections.insert(env_key, SectionOverride::remove());
+        return SystemMessageConfig {
+            mode: Some(SystemMessageMode::Customize),
+            sections: Some(sections),
+            ..Default::default()
+        };
+    };
+
+    if supplied.mode == Some(SystemMessageMode::Replace) {
+        return supplied;
+    }
+
+    let mut sections = supplied.sections.take().unwrap_or_default();
+    sections
+        .entry(env_key)
+        .or_insert_with(SectionOverride::remove);
+    supplied.mode = Some(SystemMessageMode::Customize);
+    supplied.sections = Some(sections);
+    supplied
+}
+
+/// Splits section overrides into the wire payload and the client-side transform
+/// callbacks, mirroring the Node.js `extractTransformCallbacks` helper.
+fn extract_transform_callbacks(
+    system_message: Option<&crate::types::SystemMessageConfig>,
+) -> HashMap<String, crate::types::SectionTransformFn> {
+    let Some(system_message) = system_message else {
+        return HashMap::new();
+    };
+    if system_message.mode != Some(crate::types::SystemMessageMode::Customize) {
+        return HashMap::new();
+    }
+    let Some(sections) = system_message.sections.as_ref() else {
+        return HashMap::new();
+    };
+
+    sections
+        .iter()
+        .filter_map(|(id, override_)| {
+            override_
+                .transform_fn()
+                .map(|callback| (id.clone(), Arc::clone(callback)))
+        })
+        .collect()
+}
+
 fn parse_cli_url(url: &str) -> Result<(String, u16)> {
     let mut s = url.trim();
     if let Some((_, rest)) = s.split_once("://") {
@@ -417,6 +846,7 @@ async fn detect_tcp_port_from_stdout(stdout: tokio::process::ChildStdout) -> Res
 enum RpcClient {
     Stdio(StdioJsonRpcClient),
     Tcp(TcpJsonRpcClient),
+    ParentStdio(JsonRpcClient<ParentStdioTransport>),
 }
 
 impl RpcClient {
@@ -424,6 +854,7 @@ impl RpcClient {
         match self {
             RpcClient::Stdio(rpc) => rpc.stop().await,
             RpcClient::Tcp(rpc) => rpc.stop().await,
+            RpcClient::ParentStdio(rpc) => rpc.stop().await,
         }
     }
 
@@ -441,6 +872,13 @@ impl RpcClient {
                 .await;
             }
             RpcClient::Tcp(rpc) => {
+                let handler = Arc::clone(&handler);
+                rpc.set_notification_handler(move |method, params| {
+                    (handler)(method, params);
+                })
+                .await;
+            }
+            RpcClient::ParentStdio(rpc) => {
                 let handler = Arc::clone(&handler);
                 rpc.set_notification_handler(move |method, params| {
                     (handler)(method, params);
@@ -466,6 +904,11 @@ impl RpcClient {
                 rpc.set_request_handler(move |method, params| (handler)(method, params))
                     .await;
             }
+            RpcClient::ParentStdio(rpc) => {
+                let handler = Arc::clone(&handler);
+                rpc.set_request_handler(move |method, params| (handler)(method, params))
+                    .await;
+            }
         }
     }
 
@@ -473,6 +916,7 @@ impl RpcClient {
         match self {
             RpcClient::Stdio(rpc) => rpc.invoke(method, params).await,
             RpcClient::Tcp(rpc) => rpc.invoke(method, params).await,
+            RpcClient::ParentStdio(rpc) => rpc.invoke(method, params).await,
         }
     }
 }
@@ -563,6 +1007,30 @@ impl Client {
             ));
         }
 
+        // Empty mode: validate at construction time that the app supplied a
+        // per-session persistence location. The runtime is mode-agnostic, so
+        // without this check it would silently fall back to the user's home
+        // directory, defeating the point of empty mode for multi-tenant hosts.
+        if options.mode == CopilotClientMode::Empty {
+            let has_persistence = options.cwd.is_some()
+                || options.session_fs.is_some()
+                // External / parent-owned runtimes manage their own persistence.
+                || options.cli_url.is_some()
+                || options.connection_kind == ConnectionKind::ParentProcess;
+            if !has_persistence {
+                return Err(CopilotError::InvalidConfig(
+                    "Client was created with CopilotClientMode::Empty but neither `cwd` nor \
+                     `session_fs` was set. Empty mode requires an explicit per-session \
+                     persistence location; pick one."
+                        .into(),
+                ));
+            }
+        }
+
+        if let Some(session_fs) = &options.session_fs {
+            session_fs.validate().map_err(CopilotError::InvalidConfig)?;
+        }
+
         Ok(Self {
             options,
             state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
@@ -619,7 +1087,87 @@ impl Client {
         self.setup_handlers().await?;
 
         *self.state.write().await = ConnectionState::Connected;
+
+        // Advertise the client-provided session filesystem, if configured.
+        if let Err(e) = self.announce_session_fs().await {
+            *self.state.write().await = ConnectionState::Error;
+            return Err(e);
+        }
+
         Ok(())
+    }
+
+    /// Sends `sessionFs.setProvider` when the client declares a session
+    /// filesystem, telling the runtime to route all file operations back to us.
+    async fn announce_session_fs(&self) -> Result<()> {
+        let Some(config) = self.options.session_fs.as_ref() else {
+            return Ok(());
+        };
+        let params = Some(serde_json::to_value(config)?);
+        // Called from `start`, so bypass the auto-restart wrapper in `invoke`
+        // to avoid a recursive start cycle.
+        let rpc = self.rpc.lock().await;
+        let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
+        rpc.invoke("sessionFs.setProvider", params).await?;
+        Ok(())
+    }
+
+    /// Joins the current foreground session as a Copilot CLI extension.
+    ///
+    /// Intended for extensions launched as child processes of the Copilot CLI:
+    /// the session id is read from the `SESSION_ID` environment variable and
+    /// the client speaks JSON-RPC over this process's own stdin/stdout.
+    ///
+    /// The permission handler defaults to
+    /// [`default_join_session_permission_handler`](crate::default_join_session_permission_handler)
+    /// and `suppress_resume_event` defaults to `true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CopilotError::InvalidConfig`] when `SESSION_ID` is not set,
+    /// which means the process was not started by the Copilot CLI.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use copilot_sdk::{Client, ResumeSessionConfig};
+    ///
+    /// # async fn run() -> copilot_sdk::Result<()> {
+    /// let (client, session) = Client::join_session(ResumeSessionConfig::default()).await?;
+    /// session.send("Hello from the extension").await?;
+    /// # let _ = client;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn join_session(
+        mut config: ResumeSessionConfig,
+    ) -> Result<(Arc<Client>, Arc<Session>)> {
+        let session_id = std::env::var("SESSION_ID").ok().filter(|s| !s.is_empty());
+        let session_id = session_id.ok_or_else(|| {
+            CopilotError::InvalidConfig(
+                "join_session() is intended for extensions running as child processes of the \
+                 Copilot CLI (SESSION_ID is not set)"
+                    .into(),
+            )
+        })?;
+
+        if config.suppress_resume_event.is_none() {
+            config.suppress_resume_event = Some(true);
+        }
+
+        let client = Arc::new(Client::new(ClientOptions {
+            connection_kind: ConnectionKind::ParentProcess,
+            auto_start: false,
+            auto_restart: false,
+            ..Default::default()
+        })?);
+        client.start().await?;
+
+        let session = client.resume_session(&session_id, config).await?;
+        session
+            .register_permission_handler(crate::types::default_join_session_permission_handler)
+            .await;
+        Ok((client, session))
     }
 
     /// Stop the client gracefully.
@@ -696,6 +1244,22 @@ impl Client {
     pub async fn create_session(&self, mut config: SessionConfig) -> Result<Arc<Session>> {
         self.ensure_connected().await?;
 
+        // Empty mode requires every session to opt into its tools explicitly.
+        if self.options.mode == CopilotClientMode::Empty && config.available_tools.is_none() {
+            return Err(CopilotError::InvalidConfig(
+                "Client is in CopilotClientMode::Empty but the session config did not specify \
+                 `available_tools`. Empty mode requires every session to explicitly opt into \
+                 the tools it wants — e.g. `ToolSet::new().add_built_in(BuiltInTools::ISOLATED)`."
+                    .into(),
+            ));
+        }
+
+        // Empty mode drops the environment-context section unless the caller
+        // already made a decision about it.
+        if self.options.mode == CopilotClientMode::Empty {
+            config.system_message = Some(empty_mode_system_message(config.system_message.take()));
+        }
+
         // Apply BYOK from environment if enabled and not explicitly set
         if config.auto_byok_from_env && config.model.is_none() {
             config.model = ProviderConfig::model_from_env();
@@ -705,7 +1269,9 @@ impl Client {
         }
 
         // Build the request
-        let params = serde_json::to_value(&config)?;
+        let mut params = serde_json::to_value(&config)?;
+        apply_wire_session_defaults(&mut params, self.options.mode, config.hooks.as_ref());
+        self.inject_trace_context(&mut params).await;
 
         // Send the request
         let result = self.invoke("session.create", Some(params)).await?;
@@ -728,10 +1294,36 @@ impl Client {
             .create_session_object(session_id.clone(), workspace_path)
             .await;
 
+        // Apply host-reported capabilities from the response.
+        if let Some(caps) = result.get("capabilities") {
+            if let Ok(capabilities) =
+                serde_json::from_value::<crate::types::SessionCapabilities>(caps.clone())
+            {
+                session.set_capabilities(capabilities).await;
+            }
+        }
+
         // Register hooks from config if provided
         if let Some(hooks) = config.hooks.take() {
             if hooks.has_any() {
                 session.register_hooks(hooks).await;
+            }
+        }
+
+        // Register system message section transform callbacks.
+        let transforms = extract_transform_callbacks(config.system_message.as_ref());
+        if !transforms.is_empty() {
+            session.register_transform_callbacks(transforms).await;
+        }
+
+        // Apply post-create session options. If the patch fails, disconnect the
+        // orphaned runtime session rather than leaking it with permissive
+        // defaults, then surface the original error.
+        let patch = session_options_patch_for_mode(&config, self.options.mode);
+        if !patch.is_empty() {
+            if let Err(e) = session.update_options(patch).await {
+                let _ = session.destroy().await;
+                return Err(e);
             }
         }
 
@@ -742,6 +1334,25 @@ impl Client {
             .insert(session_id, Arc::clone(&session));
 
         Ok(session)
+    }
+
+    /// Injects W3C trace-context headers into an outgoing request payload.
+    async fn inject_trace_context(&self, params: &mut Value) {
+        let Some(provider) = self.options.on_get_trace_context.as_ref() else {
+            return;
+        };
+        let context = crate::trace::get_trace_context(Some(provider)).await;
+        if context.is_empty() {
+            return;
+        }
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(traceparent) = context.traceparent {
+                obj.insert("traceparent".into(), json!(traceparent));
+            }
+            if let Some(tracestate) = context.tracestate {
+                obj.insert("tracestate".into(), json!(tracestate));
+            }
+        }
     }
 
     /// Resume an existing session.
@@ -760,6 +1371,8 @@ impl Client {
         // Build the request
         let mut params = serde_json::to_value(&config)?;
         params["sessionId"] = json!(session_id);
+        apply_wire_session_defaults(&mut params, self.options.mode, config.hooks.as_ref());
+        self.inject_trace_context(&mut params).await;
 
         // Send the request
         let result = self.invoke("session.resume", Some(params)).await?;
@@ -782,10 +1395,43 @@ impl Client {
             .create_session_object(resumed_id.clone(), workspace_path)
             .await;
 
+        // Apply host-reported capabilities from the response.
+        if let Some(caps) = result.get("capabilities") {
+            if let Ok(capabilities) =
+                serde_json::from_value::<crate::types::SessionCapabilities>(caps.clone())
+            {
+                session.set_capabilities(capabilities).await;
+            }
+        }
+
         // Register hooks from config if provided
         if let Some(hooks) = config.hooks.take() {
             if hooks.has_any() {
                 session.register_hooks(hooks).await;
+            }
+        }
+
+        // Register system message section transform callbacks.
+        let transforms = extract_transform_callbacks(config.system_message.as_ref());
+        if !transforms.is_empty() {
+            session.register_transform_callbacks(transforms).await;
+        }
+
+        // Record canvas instances the host restored alongside the session.
+        if let Some(open) = result.get("openCanvases") {
+            if let Ok(instances) =
+                serde_json::from_value::<Vec<crate::canvas::OpenCanvasInstance>>(open.clone())
+            {
+                session.set_open_canvases(instances).await;
+            }
+        }
+
+        // Apply post-resume session options; roll back on failure.
+        let patch = resume_options_patch_for_mode(&config, self.options.mode);
+        if !patch.is_empty() {
+            if let Err(e) = session.update_options(patch).await {
+                let _ = session.destroy().await;
+                return Err(e);
             }
         }
 
@@ -900,7 +1546,7 @@ impl Client {
 
     /// List available models with their metadata.
     ///
-    /// Results are cached after the first call. Use [`clear_models_cache`] to force a refresh.
+    /// Results are cached after the first call. Use [`Client::clear_models_cache`] to force a refresh.
     ///
     /// If `on_list_models` was set via the builder, that callback is used instead of
     /// querying the CLI (useful for BYOK scenarios).
@@ -954,7 +1600,7 @@ impl Client {
     pub async fn get_quota(&self) -> Result<QuotaResult> {
         self.ensure_connected().await?;
 
-        let result = self.invoke("account.get_quota", None).await?;
+        let result = self.invoke("account.getQuota", None).await?;
         serde_json::from_value(result)
             .map_err(|e| CopilotError::Protocol(format!("Failed to parse quota result: {}", e)))
     }
@@ -1093,6 +1739,13 @@ impl Client {
 
     /// Start the CLI server process.
     async fn start_cli_server(&self) -> Result<()> {
+        if self.options.connection_kind == ConnectionKind::ParentProcess {
+            let rpc = JsonRpcClient::new(ParentStdioTransport::new());
+            rpc.start().await?;
+            *self.rpc.lock().await = Some(RpcClient::ParentStdio(rpc));
+            return Ok(());
+        }
+
         if let Some(cli_url) = &self.options.cli_url {
             let (host, port) = parse_cli_url(cli_url)?;
             let addr = format!("{}:{}", host, port);
@@ -1160,6 +1813,15 @@ impl Client {
             args.push("--no-auto-login".to_string());
         }
 
+        if self.options.session_idle_timeout_seconds > 0 {
+            args.push("--session-idle-timeout".to_string());
+            args.push(self.options.session_idle_timeout_seconds.to_string());
+        }
+
+        if self.options.enable_remote_sessions {
+            args.push("--remote".to_string());
+        }
+
         // Resolve command and arguments based on platform
         // On Windows, use cmd /c for PATH resolution if path is not absolute (for .cmd files)
         let (executable, full_args) = resolve_cli_command(&cli_path, &args);
@@ -1183,6 +1845,13 @@ impl Client {
 
         // Remove NODE_DEBUG to avoid debug output interfering with JSON-RPC
         proc_options = proc_options.env("NODE_DEBUG", "");
+
+        // In empty mode, disable the system keychain. It is a process-wide store
+        // shared across sessions, which is unsafe for multi-tenant hosts; the
+        // runtime falls back to file-based credential storage.
+        if self.options.mode == CopilotClientMode::Empty {
+            proc_options = proc_options.env("COPILOT_DISABLE_KEYTAR", "1");
+        }
 
         // Wire github_token auth: pass via environment variable + CLI flag
         if let Some(ref token) = self.options.github_token {
@@ -1360,6 +2029,15 @@ impl Client {
                     "permission.request" => handle_permission_request(&sessions, &params).await,
                     "userInput.request" => handle_user_input_request(&sessions, &params).await,
                     "hooks.invoke" => handle_hooks_invoke(&sessions, &params).await,
+                    "systemMessage.transform" => {
+                        handle_system_message_transform(&sessions, &params).await
+                    }
+                    m if m.starts_with("canvas.") => {
+                        handle_canvas_request(&sessions, m, &params).await
+                    }
+                    m if m.starts_with("sessionFs.") => {
+                        handle_session_fs_request(&sessions, m, &params).await
+                    }
                     _ => {
                         return Err(JsonRpcError::new(
                             -32601,
@@ -1473,6 +2151,43 @@ impl ClientBuilder {
     /// Auto-restart the connection after a fatal failure.
     pub fn auto_restart(mut self, auto_restart: bool) -> Self {
         self.options.auto_restart = auto_restart;
+        self
+    }
+
+    /// Set the client mode.
+    ///
+    /// [`CopilotClientMode::Empty`] starts from a blank slate: sessions must
+    /// opt into their tools explicitly and the client must be given an explicit
+    /// persistence location via [`ClientBuilder::cwd`] or
+    /// [`ClientBuilder::session_fs`].
+    pub fn mode(mut self, mode: CopilotClientMode) -> Self {
+        self.options.mode = mode;
+        self
+    }
+
+    /// Supply a client-hosted filesystem for sessions to use.
+    pub fn session_fs(mut self, config: crate::session_fs::SessionFsConfig) -> Self {
+        self.options.session_fs = Some(config);
+        self
+    }
+
+    /// Provide distributed-trace context injected into `session.create` and
+    /// `session.resume` requests.
+    pub fn on_get_trace_context(mut self, provider: crate::trace::TraceContextProvider) -> Self {
+        self.options.on_get_trace_context = Some(provider);
+        self
+    }
+
+    /// Set the idle timeout, in seconds, after which the runtime shuts a
+    /// session down. `0` disables the timeout.
+    pub fn session_idle_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.options.session_idle_timeout_seconds = seconds;
+        self
+    }
+
+    /// Start the runtime with remote-session support (`--remote`).
+    pub fn enable_remote_sessions(mut self, enabled: bool) -> Self {
+        self.options.enable_remote_sessions = enabled;
         self
     }
 
@@ -1621,6 +2336,7 @@ impl ClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{SectionOverride, SectionOverrideAction};
 
     #[test]
     fn test_client_builder() {
@@ -1772,5 +2488,726 @@ mod tests {
             "arguments": "{not valid json"
         });
         assert_eq!(normalize_tool_arguments(&params), json!({}));
+    }
+
+    // =========================================================================
+    // Client mode
+    // =========================================================================
+
+    #[test]
+    fn test_empty_mode_requires_persistence() {
+        let result = Client::builder().mode(CopilotClientMode::Empty).build();
+        assert!(matches!(result, Err(CopilotError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn test_empty_mode_accepts_cwd() {
+        assert!(Client::builder()
+            .mode(CopilotClientMode::Empty)
+            .cwd("/tmp")
+            .build()
+            .is_ok());
+    }
+
+    #[test]
+    fn test_empty_mode_accepts_session_fs() {
+        let config = crate::session_fs::SessionFsConfig::new("/w", "/state");
+        assert!(Client::builder()
+            .mode(CopilotClientMode::Empty)
+            .session_fs(config)
+            .build()
+            .is_ok());
+    }
+
+    #[test]
+    fn test_copilot_cli_mode_is_the_default() {
+        let client = Client::builder().build().unwrap();
+        assert_eq!(client.options.mode, CopilotClientMode::CopilotCli);
+        assert_eq!(client.options.connection_kind, ConnectionKind::Child);
+    }
+
+    #[test]
+    fn test_empty_mode_system_message_defaults_to_removing_env_context() {
+        let config = empty_mode_system_message(None);
+        assert_eq!(
+            config.mode,
+            Some(crate::types::SystemMessageMode::Customize)
+        );
+        let sections = config.sections.unwrap();
+        assert_eq!(
+            sections
+                .get(crate::types::SystemMessageSection::EnvironmentContext.id())
+                .unwrap()
+                .action,
+            SectionOverrideAction::Remove
+        );
+    }
+
+    #[test]
+    fn test_empty_mode_system_message_respects_replace() {
+        let supplied = crate::types::SystemMessageConfig {
+            mode: Some(crate::types::SystemMessageMode::Replace),
+            ..Default::default()
+        };
+        let config = empty_mode_system_message(Some(supplied));
+        assert_eq!(config.mode, Some(crate::types::SystemMessageMode::Replace));
+        assert!(config.sections.is_none());
+    }
+
+    #[test]
+    fn test_empty_mode_system_message_preserves_explicit_env_context() {
+        let mut sections = HashMap::new();
+        sections.insert(
+            crate::types::SystemMessageSection::EnvironmentContext
+                .id()
+                .to_string(),
+            SectionOverride::append("extra"),
+        );
+        let supplied = crate::types::SystemMessageConfig {
+            mode: Some(crate::types::SystemMessageMode::Customize),
+            sections: Some(sections),
+            ..Default::default()
+        };
+        let config = empty_mode_system_message(Some(supplied));
+        let sections = config.sections.unwrap();
+        assert_eq!(
+            sections
+                .get(crate::types::SystemMessageSection::EnvironmentContext.id())
+                .unwrap()
+                .action,
+            SectionOverrideAction::Append
+        );
+    }
+
+    // =========================================================================
+    // System message transform
+    // =========================================================================
+
+    #[test]
+    fn test_extract_transform_callbacks_requires_customize_mode() {
+        let mut sections = HashMap::new();
+        sections.insert(
+            "identity".to_string(),
+            SectionOverride::transform(|content| Box::pin(async move { content })),
+        );
+        let config = crate::types::SystemMessageConfig {
+            mode: Some(crate::types::SystemMessageMode::Replace),
+            sections: Some(sections),
+            ..Default::default()
+        };
+        assert!(extract_transform_callbacks(Some(&config)).is_empty());
+    }
+
+    #[test]
+    fn test_extract_transform_callbacks_collects_only_transforms() {
+        let mut sections = HashMap::new();
+        sections.insert(
+            "identity".to_string(),
+            SectionOverride::transform(|content| Box::pin(async move { content })),
+        );
+        sections.insert("tone".to_string(), SectionOverride::remove());
+        let config = crate::types::SystemMessageConfig {
+            mode: Some(crate::types::SystemMessageMode::Customize),
+            sections: Some(sections),
+            ..Default::default()
+        };
+        let callbacks = extract_transform_callbacks(Some(&config));
+        assert_eq!(callbacks.len(), 1);
+        assert!(callbacks.contains_key("identity"));
+    }
+
+    #[test]
+    fn test_extract_transform_callbacks_without_config() {
+        assert!(extract_transform_callbacks(None).is_empty());
+    }
+
+    #[test]
+    fn test_transform_override_serializes_as_transform_action() {
+        let over = SectionOverride::transform(|content| Box::pin(async move { content }));
+        let value = serde_json::to_value(&over).unwrap();
+        assert_eq!(value["action"], "transform");
+        assert!(value.get("transform").is_none());
+    }
+
+    fn test_sessions(session: Arc<Session>) -> RwLock<HashMap<String, Arc<Session>>> {
+        let mut map = HashMap::new();
+        map.insert(session.session_id().to_string(), session);
+        RwLock::new(map)
+    }
+
+    fn noop_invoke(_method: &str, _params: Option<Value>) -> crate::session::InvokeFuture {
+        Box::pin(async { Ok(json!({})) })
+    }
+
+    #[tokio::test]
+    async fn test_handle_system_message_transform_passes_through_unregistered() {
+        let session = Arc::new(Session::new("s1".to_string(), None, noop_invoke));
+        let sessions = test_sessions(session);
+
+        let out = handle_system_message_transform(
+            &sessions,
+            &json!({
+                "sessionId": "s1",
+                "sections": { "identity": { "content": "original" } }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out["sections"]["identity"]["content"], "original");
+    }
+
+    #[tokio::test]
+    async fn test_handle_system_message_transform_applies_callback() {
+        let session = Arc::new(Session::new("s1".to_string(), None, noop_invoke));
+        let mut callbacks: HashMap<String, crate::types::SectionTransformFn> = HashMap::new();
+        callbacks.insert(
+            "identity".to_string(),
+            Arc::new(|content: String| Box::pin(async move { format!("{content}!") }) as _),
+        );
+        session.register_transform_callbacks(callbacks).await;
+        let sessions = test_sessions(session);
+
+        let out = handle_system_message_transform(
+            &sessions,
+            &json!({
+                "sessionId": "s1",
+                "sections": {
+                    "identity": { "content": "hello" },
+                    "tone": { "content": "keep" }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out["sections"]["identity"]["content"], "hello!");
+        assert_eq!(out["sections"]["tone"]["content"], "keep");
+    }
+
+    #[tokio::test]
+    async fn test_handle_system_message_transform_unknown_session() {
+        let session = Arc::new(Session::new("s1".to_string(), None, noop_invoke));
+        let sessions = test_sessions(session);
+        let err = handle_system_message_transform(
+            &sessions,
+            &json!({ "sessionId": "nope", "sections": {} }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CopilotError::Protocol(_)));
+    }
+
+    // =========================================================================
+    // sessionFs dispatch
+    // =========================================================================
+
+    #[derive(Default)]
+    struct StubFs {
+        files: std::sync::Mutex<HashMap<String, String>>,
+    }
+
+    impl crate::session_fs::SessionFsProvider for StubFs {
+        fn read_file<'a>(
+            &'a self,
+            path: &'a str,
+        ) -> crate::session_fs::SessionFsFuture<'a, String> {
+            Box::pin(async move {
+                self.files
+                    .lock()
+                    .unwrap()
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| crate::session_fs::SessionFsError::not_found(path))
+            })
+        }
+
+        fn write_file<'a>(
+            &'a self,
+            path: &'a str,
+            content: &'a str,
+            _mode: Option<u32>,
+        ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+            Box::pin(async move {
+                self.files
+                    .lock()
+                    .unwrap()
+                    .insert(path.to_string(), content.to_string());
+                Ok(())
+            })
+        }
+
+        fn exists<'a>(&'a self, path: &'a str) -> crate::session_fs::SessionFsFuture<'a, bool> {
+            Box::pin(async move { Ok(self.files.lock().unwrap().contains_key(path)) })
+        }
+
+        fn stat<'a>(
+            &'a self,
+            path: &'a str,
+        ) -> crate::session_fs::SessionFsFuture<'a, crate::session_fs::SessionFsFileInfo> {
+            Box::pin(async move {
+                let files = self.files.lock().unwrap();
+                let content = files
+                    .get(path)
+                    .ok_or_else(|| crate::session_fs::SessionFsError::not_found(path))?;
+                Ok(crate::session_fs::SessionFsFileInfo {
+                    is_file: true,
+                    is_directory: false,
+                    size: content.len() as u64,
+                    mtime: "2024-01-01T00:00:00.000Z".to_string(),
+                    birthtime: "2024-01-01T00:00:00.000Z".to_string(),
+                })
+            })
+        }
+
+        fn readdir<'a>(
+            &'a self,
+            _path: &'a str,
+        ) -> crate::session_fs::SessionFsFuture<'a, Vec<String>> {
+            Box::pin(async move { Ok(self.files.lock().unwrap().keys().cloned().collect()) })
+        }
+
+        fn readdir_with_types<'a>(
+            &'a self,
+            _path: &'a str,
+        ) -> crate::session_fs::SessionFsFuture<'a, Vec<crate::session_fs::SessionFsDirEntry>>
+        {
+            Box::pin(async move {
+                Ok(self
+                    .files
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .map(crate::session_fs::SessionFsDirEntry::file)
+                    .collect())
+            })
+        }
+
+        fn mkdir<'a>(
+            &'a self,
+            _path: &'a str,
+            _recursive: bool,
+            _mode: Option<u32>,
+        ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn rm<'a>(
+            &'a self,
+            path: &'a str,
+            _recursive: bool,
+            _force: bool,
+        ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+            Box::pin(async move {
+                self.files.lock().unwrap().remove(path);
+                Ok(())
+            })
+        }
+
+        fn rename<'a>(
+            &'a self,
+            src: &'a str,
+            dest: &'a str,
+        ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+            Box::pin(async move {
+                let mut files = self.files.lock().unwrap();
+                let content = files
+                    .remove(src)
+                    .ok_or_else(|| crate::session_fs::SessionFsError::not_found(src))?;
+                files.insert(dest.to_string(), content);
+                Ok(())
+            })
+        }
+    }
+
+    async fn stub_fs_sessions() -> RwLock<HashMap<String, Arc<Session>>> {
+        let session = Arc::new(Session::new("s1".to_string(), None, noop_invoke));
+        session
+            .register_session_fs_provider(Arc::new(StubFs::default()))
+            .await;
+        test_sessions(session)
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_write_then_read() {
+        let sessions = stub_fs_sessions().await;
+
+        let written = handle_session_fs_request(
+            &sessions,
+            "sessionFs.writeFile",
+            &json!({ "sessionId": "s1", "path": "/a.txt", "content": "hi" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(written, Value::Null);
+
+        let read = handle_session_fs_request(
+            &sessions,
+            "sessionFs.readFile",
+            &json!({ "sessionId": "s1", "path": "/a.txt" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read["content"], "hi");
+        assert!(read.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_read_missing_returns_enoent() {
+        let sessions = stub_fs_sessions().await;
+        let read = handle_session_fs_request(
+            &sessions,
+            "sessionFs.readFile",
+            &json!({ "sessionId": "s1", "path": "/missing" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read["error"]["code"], "ENOENT");
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_exists_and_stat() {
+        let sessions = stub_fs_sessions().await;
+        handle_session_fs_request(
+            &sessions,
+            "sessionFs.writeFile",
+            &json!({ "sessionId": "s1", "path": "/a.txt", "content": "abc" }),
+        )
+        .await
+        .unwrap();
+
+        let exists = handle_session_fs_request(
+            &sessions,
+            "sessionFs.exists",
+            &json!({ "sessionId": "s1", "path": "/a.txt" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exists["exists"], true);
+
+        let stat = handle_session_fs_request(
+            &sessions,
+            "sessionFs.stat",
+            &json!({ "sessionId": "s1", "path": "/a.txt" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stat["isFile"], true);
+        assert_eq!(stat["size"], 3);
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_append_uses_default_impl() {
+        let sessions = stub_fs_sessions().await;
+        for chunk in ["a", "b"] {
+            handle_session_fs_request(
+                &sessions,
+                "sessionFs.appendFile",
+                &json!({ "sessionId": "s1", "path": "/log", "content": chunk }),
+            )
+            .await
+            .unwrap();
+        }
+        let read = handle_session_fs_request(
+            &sessions,
+            "sessionFs.readFile",
+            &json!({ "sessionId": "s1", "path": "/log" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read["content"], "ab");
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_rename_and_rm() {
+        let sessions = stub_fs_sessions().await;
+        handle_session_fs_request(
+            &sessions,
+            "sessionFs.writeFile",
+            &json!({ "sessionId": "s1", "path": "/a", "content": "x" }),
+        )
+        .await
+        .unwrap();
+
+        let renamed = handle_session_fs_request(
+            &sessions,
+            "sessionFs.rename",
+            &json!({ "sessionId": "s1", "src": "/a", "dest": "/b" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed, Value::Null);
+
+        let failed = handle_session_fs_request(
+            &sessions,
+            "sessionFs.rename",
+            &json!({ "sessionId": "s1", "src": "/nope", "dest": "/c" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(failed["code"], "ENOENT");
+
+        let removed = handle_session_fs_request(
+            &sessions,
+            "sessionFs.rm",
+            &json!({ "sessionId": "s1", "path": "/b", "recursive": false, "force": true }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_readdir_with_types_shape() {
+        let sessions = stub_fs_sessions().await;
+        handle_session_fs_request(
+            &sessions,
+            "sessionFs.writeFile",
+            &json!({ "sessionId": "s1", "path": "/a", "content": "x" }),
+        )
+        .await
+        .unwrap();
+
+        let listing = handle_session_fs_request(
+            &sessions,
+            "sessionFs.readdirWithTypes",
+            &json!({ "sessionId": "s1", "path": "/" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listing["entries"][0]["name"], "/a");
+        assert_eq!(listing["entries"][0]["type"], "file");
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_sqlite_absent_by_default() {
+        let sessions = stub_fs_sessions().await;
+        let exists = handle_session_fs_request(
+            &sessions,
+            "sessionFs.sqliteExists",
+            &json!({ "sessionId": "s1" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exists["exists"], false);
+
+        let err = handle_session_fs_request(
+            &sessions,
+            "sessionFs.sqliteQuery",
+            &json!({ "sessionId": "s1", "query": "SELECT 1", "queryType": "query" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CopilotError::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_without_provider_is_an_error() {
+        let session = Arc::new(Session::new("s1".to_string(), None, noop_invoke));
+        let sessions = test_sessions(session);
+        let err = handle_session_fs_request(
+            &sessions,
+            "sessionFs.readFile",
+            &json!({ "sessionId": "s1", "path": "/a" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CopilotError::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn test_inject_trace_context_adds_headers() {
+        let client = Client::builder()
+            .on_get_trace_context(Arc::new(|| {
+                Box::pin(async {
+                    crate::trace::TraceContext {
+                        traceparent: Some("00-abc-def-01".to_string()),
+                        tracestate: Some("vendor=1".to_string()),
+                    }
+                })
+            }))
+            .build()
+            .unwrap();
+
+        let mut params = json!({ "sessionId": "s1" });
+        client.inject_trace_context(&mut params).await;
+        assert_eq!(params["traceparent"], "00-abc-def-01");
+        assert_eq!(params["tracestate"], "vendor=1");
+    }
+
+    #[tokio::test]
+    async fn test_inject_trace_context_noop_without_provider() {
+        let client = Client::builder().build().unwrap();
+        let mut params = json!({ "sessionId": "s1" });
+        client.inject_trace_context(&mut params).await;
+        assert_eq!(params, json!({ "sessionId": "s1" }));
+    }
+
+    #[tokio::test]
+    async fn test_session_fs_unknown_method() {
+        let sessions = stub_fs_sessions().await;
+        let err = handle_session_fs_request(
+            &sessions,
+            "sessionFs.teleport",
+            &json!({ "sessionId": "s1", "path": "/a" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CopilotError::Protocol(_)));
+    }
+    // ---- Wave 3: wire defaults + session options patch ----
+
+    #[test]
+    fn test_apply_wire_session_defaults_injects_constants() {
+        let mut params = json!({});
+        apply_wire_session_defaults(&mut params, CopilotClientMode::CopilotCli, None);
+        assert_eq!(params["toolFilterPrecedence"], "excluded");
+        assert_eq!(params["envValueMode"], "direct");
+        assert_eq!(params["includeSubAgentStreamingEvents"], true);
+        assert_eq!(params["hooks"], false);
+        // Non-empty mode must not lock down runtime features.
+        assert!(params.get("enableSkills").is_none());
+        assert!(params.get("enableSessionStore").is_none());
+    }
+
+    #[test]
+    fn test_apply_wire_session_defaults_preserves_caller_values() {
+        let mut params = json!({
+            "toolFilterPrecedence": "available",
+            "includeSubAgentStreamingEvents": false,
+            "enableSkills": true,
+        });
+        apply_wire_session_defaults(&mut params, CopilotClientMode::Empty, None);
+        assert_eq!(params["toolFilterPrecedence"], "available");
+        assert_eq!(params["includeSubAgentStreamingEvents"], false);
+        assert_eq!(params["enableSkills"], true);
+    }
+
+    #[test]
+    fn test_apply_wire_session_defaults_empty_mode_locks_down_features() {
+        let mut params = json!({});
+        apply_wire_session_defaults(&mut params, CopilotClientMode::Empty, None);
+        assert_eq!(params["enableSessionTelemetry"], false);
+        assert_eq!(params["mcpOAuthTokenStorage"], "in-memory");
+        assert_eq!(params["skipEmbeddingRetrieval"], true);
+        assert_eq!(params["embeddingCacheStorage"], "in-memory");
+        assert_eq!(params["enableOnDemandInstructionDiscovery"], false);
+        assert_eq!(params["enableFileHooks"], false);
+        assert_eq!(params["enableHostGitOperations"], false);
+        assert_eq!(params["enableSessionStore"], false);
+        assert_eq!(params["enableSkills"], false);
+    }
+
+    #[test]
+    fn test_apply_wire_session_defaults_hooks_flag() {
+        let hooks = SessionHooks {
+            on_session_start: Some(Arc::new(|_| Default::default())),
+            ..Default::default()
+        };
+        let mut params = json!({});
+        apply_wire_session_defaults(&mut params, CopilotClientMode::CopilotCli, Some(&hooks));
+        assert_eq!(params["hooks"], true);
+    }
+
+    #[test]
+    fn test_session_options_patch_empty_mode_forces_defaults() {
+        let patch =
+            session_options_patch_for_mode(&SessionConfig::default(), CopilotClientMode::Empty);
+        assert_eq!(patch.skip_custom_instructions, Some(true));
+        assert_eq!(patch.custom_agents_local_only, Some(true));
+        assert_eq!(patch.coauthor_enabled, Some(false));
+        assert_eq!(patch.manage_schedule_enabled, Some(false));
+        assert_eq!(patch.installed_plugins.as_deref(), Some(&[][..]));
+    }
+
+    #[test]
+    fn test_session_options_patch_empty_mode_respects_explicit_values() {
+        let config = SessionConfig {
+            skip_custom_instructions: Some(false),
+            coauthor_enabled: Some(true),
+            ..Default::default()
+        };
+        let patch = session_options_patch_for_mode(&config, CopilotClientMode::Empty);
+        assert_eq!(patch.skip_custom_instructions, Some(false));
+        assert_eq!(patch.coauthor_enabled, Some(true));
+        // Unset fields still get the empty-mode default.
+        assert_eq!(patch.custom_agents_local_only, Some(true));
+    }
+
+    #[test]
+    fn test_session_options_patch_cli_mode_passes_through() {
+        let patch = session_options_patch_for_mode(
+            &SessionConfig::default(),
+            CopilotClientMode::CopilotCli,
+        );
+        assert!(patch.is_empty());
+
+        let config = SessionConfig {
+            manage_schedule_enabled: Some(true),
+            ..Default::default()
+        };
+        let patch = session_options_patch_for_mode(&config, CopilotClientMode::CopilotCli);
+        assert!(!patch.is_empty());
+        assert_eq!(patch.manage_schedule_enabled, Some(true));
+        assert!(patch.installed_plugins.is_none());
+    }
+
+    #[test]
+    fn test_resume_options_patch_for_mode() {
+        let patch = resume_options_patch_for_mode(
+            &ResumeSessionConfig::default(),
+            CopilotClientMode::CopilotCli,
+        );
+        assert!(patch.is_empty());
+
+        let patch = resume_options_patch_for_mode(
+            &ResumeSessionConfig::default(),
+            CopilotClientMode::Empty,
+        );
+        assert_eq!(patch.custom_agents_local_only, Some(true));
+        assert_eq!(patch.installed_plugins.as_deref(), Some(&[][..]));
+    }
+
+    #[test]
+    fn test_resume_session_config_wave3_wire_names() {
+        let config = ResumeSessionConfig {
+            available_tools: Some(vec!["shell".into()]),
+            excluded_tools: Some(vec!["write".into()]),
+            reasoning_summary: Some(crate::types::ReasoningSummary::Detailed),
+            enable_mcp_apps: Some(true),
+            config_directory: Some("/cfg".into()),
+            mcp_oauth_token_storage: Some(crate::types::StorageMode::InMemory),
+            continue_pending_work: Some(true),
+            github_token: Some("tok".into()),
+            remote_session: Some(crate::types::RemoteSessionMode::On),
+            open_canvases: Some(vec![crate::canvas::OpenCanvasInstance {
+                instance_id: "i1".into(),
+                extension_id: "e1".into(),
+                extension_name: None,
+                canvas_id: "c1".into(),
+                title: None,
+                status: None,
+                url: None,
+                input: None,
+                reopen: true,
+                availability: crate::canvas::CanvasInstanceAvailability::Ready,
+            }]),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&config).unwrap();
+        assert_eq!(v["availableTools"][0], "shell");
+        assert_eq!(v["excludedTools"][0], "write");
+        assert_eq!(v["reasoningSummary"], "detailed");
+        assert_eq!(v["requestMcpApps"], true);
+        assert_eq!(v["configDir"], "/cfg");
+        assert_eq!(v["mcpOAuthTokenStorage"], "in-memory");
+        assert_eq!(v["continuePendingWork"], true);
+        assert_eq!(v["gitHubToken"], "tok");
+        assert_eq!(v["remoteSession"], "on");
+        assert_eq!(v["openCanvases"][0]["instanceId"], "i1");
+        assert_eq!(v["openCanvases"][0]["availability"], "ready");
+        // Post-resume options are never sent on the resume request itself.
+        assert!(v.get("skipCustomInstructions").is_none());
+        assert!(v.get("coauthorEnabled").is_none());
     }
 }

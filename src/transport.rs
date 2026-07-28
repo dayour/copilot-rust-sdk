@@ -111,9 +111,81 @@ impl Transport for StdioTransport {
 }
 
 // =============================================================================
-// Content-Length Message Framer (LSP-style)
+// Parent-Process Stdio Transport
 // =============================================================================
 
+/// Transport using **this** process's own stdin/stdout.
+///
+/// Used when the SDK runs as a child process of the Copilot CLI and speaks
+/// JSON-RPC to its parent — the connection mode behind
+/// [`Client::join_session`](crate::client::Client::join_session).
+pub struct ParentStdioTransport {
+    stdin: BufReader<tokio::io::Stdin>,
+    stdout: tokio::io::Stdout,
+    open: bool,
+}
+
+impl ParentStdioTransport {
+    /// Create a transport bound to this process's stdin/stdout.
+    pub fn new() -> Self {
+        Self {
+            stdin: BufReader::new(tokio::io::stdin()),
+            stdout: tokio::io::stdout(),
+            open: true,
+        }
+    }
+}
+
+impl Default for ParentStdioTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Transport for ParentStdioTransport {
+    fn read<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + 'a>> {
+        Box::pin(async move {
+            if !self.open {
+                return Err(CopilotError::ConnectionClosed);
+            }
+            self.stdin.read(buf).await.map_err(CopilotError::Transport)
+        })
+    }
+
+    fn write<'a>(
+        &'a mut self,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if !self.open {
+                return Err(CopilotError::ConnectionClosed);
+            }
+            self.stdout
+                .write_all(data)
+                .await
+                .map_err(CopilotError::Transport)?;
+            self.stdout.flush().await.map_err(CopilotError::Transport)
+        })
+    }
+
+    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            self.open = false;
+            Ok(())
+        })
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+// =============================================================================
+// Content-Length Message Framer (LSP-style)
+// =============================================================================
 /// Handles Content-Length header framing for JSON-RPC messages.
 ///
 /// Message format:

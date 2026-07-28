@@ -5,13 +5,19 @@
 //!
 //! A session represents a conversation with the Copilot CLI.
 
+use crate::canvas::CanvasHandler;
 use crate::error::{CopilotError, Result};
 use crate::events::{SessionEvent, SessionEventData};
+use crate::lsp::LspServerConfig;
+use crate::session_fs::SessionFsProvider;
 use crate::types::{
-    AgentInfo, ErrorOccurredHookInput, FleetStartOptions, LogOptions, LogResult, MessageOptions,
-    PermissionRequest, PermissionRequestResult, PlanData, PostToolUseHookInput,
-    PreToolUseHookInput, SessionEndHookInput, SessionHooks, SessionMode, SessionStartHookInput,
-    SetModelOptions, ShellExecOptions, ShellExecResult, ShellSignal, Tool, ToolResultObject,
+    AgentInfo, AutoModeSwitchRequest, AutoModeSwitchResponse, CommandContext, ElicitationContext,
+    ElicitationMode, ElicitationResult, ErrorOccurredHookInput, ExitPlanModeRequest,
+    ExitPlanModeResult, FleetStartOptions, LogOptions, LogResult, LspInitializeOptions,
+    MessageOptions, PermissionRequest, PermissionRequestResult, PlanData, PostToolUseHookInput,
+    PreToolUseHookInput, SectionTransformFn, SessionCapabilities, SessionEndHookInput,
+    SessionHooks, SessionMode, SessionStartHookInput, SessionUpdateOptions, SetModelOptions,
+    ShellExecOptions, ShellExecResult, ShellSignal, Tool, ToolResultObject, UiInputOptions,
     UserInputInvocation, UserInputRequest, UserInputResponse, UserPromptSubmittedHookInput,
     WorkspaceFile,
 };
@@ -39,6 +45,22 @@ pub type ToolHandler = Arc<dyn Fn(&str, &Value) -> ToolResultObject + Send + Syn
 /// Handler for user input requests.
 pub type UserInputHandler =
     Arc<dyn Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse + Send + Sync>;
+
+/// Handler invoked when the server dispatches an elicitation request.
+///
+/// Returns the [`ElicitationResult`] carrying the user's response.
+pub type ElicitationHandler = Arc<dyn Fn(&ElicitationContext) -> ElicitationResult + Send + Sync>;
+
+/// Handler invoked when the agent requests to exit plan mode.
+pub type ExitPlanModeHandler =
+    Arc<dyn Fn(&ExitPlanModeRequest) -> ExitPlanModeResult + Send + Sync>;
+
+/// Handler invoked when the agent requests an auto-mode switch after a rate limit.
+pub type AutoModeSwitchHandler =
+    Arc<dyn Fn(&AutoModeSwitchRequest) -> AutoModeSwitchResponse + Send + Sync>;
+
+/// Handler invoked when a registered slash command is executed by the user.
+pub type CommandHandler = Arc<dyn Fn(&CommandContext) + Send + Sync>;
 
 /// Type alias for the invoke future.
 pub type InvokeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>>;
@@ -88,6 +110,24 @@ struct SessionState {
     permission_handler: Option<PermissionHandler>,
     /// User input handler.
     user_input_handler: Option<UserInputHandler>,
+    /// Elicitation handler.
+    elicitation_handler: Option<ElicitationHandler>,
+    /// Exit-plan-mode handler.
+    exit_plan_mode_handler: Option<ExitPlanModeHandler>,
+    /// Auto-mode-switch handler.
+    auto_mode_switch_handler: Option<AutoModeSwitchHandler>,
+    /// Registered slash-command handlers, keyed by command name.
+    command_handlers: HashMap<String, CommandHandler>,
+    /// Handler for inbound `canvas.*` reverse-RPC requests.
+    canvas_handler: Option<Arc<dyn CanvasHandler>>,
+    /// Provider for inbound `sessionFs.*` reverse-RPC requests.
+    session_fs_provider: Option<Arc<dyn SessionFsProvider>>,
+    /// System message section transform callbacks, keyed by section id.
+    transform_callbacks: HashMap<String, SectionTransformFn>,
+    /// Host-reported capabilities from create/resume.
+    capabilities: SessionCapabilities,
+    /// Canvas instances the host reported as open on resume.
+    open_canvases: Vec<crate::canvas::OpenCanvasInstance>,
     /// Session hooks.
     hooks: Option<SessionHooks>,
     /// Callback-based event handlers.
@@ -131,7 +171,7 @@ struct SessionState {
 /// ```
 pub struct Session {
     /// Session ID.
-    session_id: String,
+    pub(crate) session_id: String,
     /// Workspace path for infinite sessions.
     workspace_path: Option<String>,
     /// Event broadcaster.
@@ -139,7 +179,7 @@ pub struct Session {
     /// Session state.
     state: Arc<RwLock<SessionState>>,
     /// JSON-RPC invoke function (injected by Client).
-    invoke_fn: Arc<InvokeFn>,
+    pub(crate) invoke_fn: Arc<InvokeFn>,
 }
 
 impl Session {
@@ -160,6 +200,15 @@ impl Session {
                 tools: HashMap::new(),
                 permission_handler: None,
                 user_input_handler: None,
+                elicitation_handler: None,
+                exit_plan_mode_handler: None,
+                auto_mode_switch_handler: None,
+                command_handlers: HashMap::new(),
+                canvas_handler: None,
+                session_fs_provider: None,
+                transform_callbacks: HashMap::new(),
+                capabilities: SessionCapabilities::default(),
+                open_canvases: Vec::new(),
                 hooks: None,
                 event_handlers: HashMap::new(),
                 next_handler_id: AtomicU64::new(1),
@@ -185,6 +234,34 @@ impl Session {
         self.workspace_path.as_deref()
     }
 
+    /// Return an LSP server configuration associated with this session.
+    ///
+    /// The configuration carries the session identity and infinite-session workspace
+    /// root without inventing a second session or transport protocol.
+    pub fn lsp_server_config(&self) -> LspServerConfig {
+        LspServerConfig::for_session(&self.session_id, self.workspace_path.as_deref())
+    }
+
+    /// (Re)load the merged LSP configuration set for the session's working directory.
+    ///
+    /// This is the client-facing `session.lsp.initialize` RPC: it asks the Copilot CLI
+    /// to load project- and user-level LSP server configs (traversing up to `git_root`
+    /// for monorepos). Pass `None` to use the session defaults.
+    ///
+    /// Note: this configures the CLI's LSP integration and is independent of the
+    /// crate's in-process [`crate::lsp::LspServer`].
+    pub async fn lsp_initialize(&self, options: Option<LspInitializeOptions>) -> Result<()> {
+        let mut params = match options {
+            Some(opts) => serde_json::to_value(opts).map_err(|e| {
+                CopilotError::Protocol(format!("Failed to serialize LSP options: {}", e))
+            })?,
+            None => serde_json::json!({}),
+        };
+        params["sessionId"] = serde_json::json!(self.session_id);
+        (self.invoke_fn)("session.lsp.initialize", Some(params)).await?;
+        Ok(())
+    }
+
     // =========================================================================
     // Event Handling
     // =========================================================================
@@ -201,7 +278,7 @@ impl Session {
     /// Register a callback-based event handler.
     ///
     /// Returns an unsubscribe closure. Call it to remove the handler.
-    /// Alternatively, use [`off`] with the internal handler ID.
+    /// Alternatively, use [`Session::off`] with the internal handler ID.
     pub async fn on<F>(&self, handler: F) -> impl FnOnce()
     where
         F: Fn(&SessionEvent) + Send + Sync + 'static,
@@ -366,6 +443,128 @@ impl Session {
                     Some(perm_result),
                 )
                 .await;
+            }
+            SessionEventData::ElicitationRequested(data) => {
+                let request_id = match &data.request_id {
+                    Some(id) => id.clone(),
+                    None => return,
+                };
+                let handler = {
+                    let state = self.state.read().await;
+                    match &state.elicitation_handler {
+                        Some(h) => h.clone(),
+                        None => return, // Another client may handle this.
+                    }
+                };
+                let session_id = self.session_id.clone();
+                let mode = data.mode.as_deref().map(|m| match m {
+                    "url" => ElicitationMode::Url,
+                    _ => ElicitationMode::Form,
+                });
+                let context = ElicitationContext {
+                    session_id: session_id.clone(),
+                    message: data.message.clone(),
+                    requested_schema: data.requested_schema.clone(),
+                    mode,
+                    elicitation_source: data.elicitation_source.clone(),
+                    url: data.url.clone(),
+                };
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(&context)))
+                        .unwrap_or_else(|_| ElicitationResult::cancel());
+                let params = serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "result": result,
+                });
+                let _ = (self.invoke_fn)("session.ui.handlePendingElicitation", Some(params)).await;
+            }
+            SessionEventData::ExitPlanModeRequested(data) => {
+                let request_id = match &data.request_id {
+                    Some(id) => id.clone(),
+                    None => return,
+                };
+                let handler = {
+                    let state = self.state.read().await;
+                    match &state.exit_plan_mode_handler {
+                        Some(h) => h.clone(),
+                        None => return,
+                    }
+                };
+                let session_id = self.session_id.clone();
+                let request = ExitPlanModeRequest {
+                    summary: data.summary.clone(),
+                    plan_content: data.plan_content.clone(),
+                    actions: data.actions.clone(),
+                    recommended_action: data.recommended_action.clone(),
+                };
+                let response = handler(&request);
+                let params = serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "response": response,
+                });
+                let _ =
+                    (self.invoke_fn)("session.ui.handlePendingExitPlanMode", Some(params)).await;
+            }
+            SessionEventData::AutoModeSwitchRequested(data) => {
+                let request_id = match &data.request_id {
+                    Some(id) => id.clone(),
+                    None => return,
+                };
+                let handler = {
+                    let state = self.state.read().await;
+                    match &state.auto_mode_switch_handler {
+                        Some(h) => h.clone(),
+                        None => return,
+                    }
+                };
+                let session_id = self.session_id.clone();
+                let request = AutoModeSwitchRequest {
+                    error_code: data.error_code.clone(),
+                    retry_after_seconds: data.retry_after_seconds,
+                };
+                let response = handler(&request);
+                let params = serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "response": response,
+                });
+                let _ =
+                    (self.invoke_fn)("session.ui.handlePendingAutoModeSwitch", Some(params)).await;
+            }
+            SessionEventData::CommandExecute(data) => {
+                let request_id = match &data.request_id {
+                    Some(id) => id.clone(),
+                    None => return,
+                };
+                let session_id = self.session_id.clone();
+                let handler = {
+                    let state = self.state.read().await;
+                    state.command_handlers.get(&data.command_name).cloned()
+                };
+                let error = match handler {
+                    Some(handler) => {
+                        let ctx = CommandContext {
+                            session_id: session_id.clone(),
+                            command: data.command.clone(),
+                            command_name: data.command_name.clone(),
+                            args: data.args.clone(),
+                        };
+                        handler(&ctx);
+                        None
+                    }
+                    None => Some(format!("Unknown command: {}", data.command_name)),
+                };
+                let mut params = serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                });
+                if let Some(error_msg) = error {
+                    params["error"] = serde_json::Value::String(error_msg);
+                }
+                let _ =
+                    (self.invoke_fn)("session.commands.handlePendingCommand", Some(params)).await;
             }
             _ => {} // Not a broadcast request event
         }
@@ -582,6 +781,226 @@ impl Session {
         state.hooks.as_ref().is_some_and(|h| h.has_any())
     }
 
+    // =========================================================================
+    // Capabilities
+    // =========================================================================
+
+    /// Set the host-reported capabilities for this session.
+    ///
+    /// Typically called by the [`Client`](crate::Client) from the
+    /// `session.create` / `session.resume` response.
+    pub async fn set_capabilities(&self, capabilities: SessionCapabilities) {
+        let mut state = self.state.write().await;
+        state.capabilities = capabilities;
+    }
+
+    /// Get the host-reported capabilities for this session.
+    pub async fn capabilities(&self) -> SessionCapabilities {
+        let state = self.state.read().await;
+        state.capabilities.clone()
+    }
+
+    /// Record the canvas instances the host reported as open.
+    ///
+    /// Typically called by the [`Client`](crate::Client) from the
+    /// `session.resume` response.
+    pub async fn set_open_canvases(&self, instances: Vec<crate::canvas::OpenCanvasInstance>) {
+        let mut state = self.state.write().await;
+        state.open_canvases = instances;
+    }
+
+    /// Canvas instances the host restored for this session.
+    ///
+    /// Populated from the `session.resume` response; empty for fresh sessions.
+    pub async fn open_canvases(&self) -> Vec<crate::canvas::OpenCanvasInstance> {
+        let state = self.state.read().await;
+        state.open_canvases.clone()
+    }
+
+    // =========================================================================
+    // Elicitation / Plan-Mode / Auto-Mode-Switch Handlers
+    // =========================================================================
+
+    /// Register a handler invoked when the server dispatches an elicitation request.
+    pub async fn register_elicitation_handler<F>(&self, handler: F)
+    where
+        F: Fn(&ElicitationContext) -> ElicitationResult + Send + Sync + 'static,
+    {
+        let mut state = self.state.write().await;
+        state.elicitation_handler = Some(Arc::new(handler));
+    }
+
+    /// Register a handler invoked when the agent requests to exit plan mode.
+    pub async fn register_exit_plan_mode_handler<F>(&self, handler: F)
+    where
+        F: Fn(&ExitPlanModeRequest) -> ExitPlanModeResult + Send + Sync + 'static,
+    {
+        let mut state = self.state.write().await;
+        state.exit_plan_mode_handler = Some(Arc::new(handler));
+    }
+
+    /// Register a handler invoked when the agent requests an auto-mode switch.
+    pub async fn register_auto_mode_switch_handler<F>(&self, handler: F)
+    where
+        F: Fn(&AutoModeSwitchRequest) -> AutoModeSwitchResponse + Send + Sync + 'static,
+    {
+        let mut state = self.state.write().await;
+        state.auto_mode_switch_handler = Some(Arc::new(handler));
+    }
+
+    // =========================================================================
+    // Slash Commands
+    // =========================================================================
+
+    /// Register a handler for a slash command invoked by the user.
+    ///
+    /// The command name is matched against `command.execute` broadcast events.
+    /// To advertise the command in the CLI TUI, also add a
+    /// [`CommandDeclaration`](crate::CommandDeclaration) to the session config.
+    pub async fn register_command<F>(&self, name: impl Into<String>, handler: F)
+    where
+        F: Fn(&CommandContext) + Send + Sync + 'static,
+    {
+        let mut state = self.state.write().await;
+        state
+            .command_handlers
+            .insert(name.into(), Arc::new(handler));
+    }
+
+    /// Remove a previously registered slash-command handler.
+    pub async fn unregister_command(&self, name: &str) {
+        let mut state = self.state.write().await;
+        state.command_handlers.remove(name);
+    }
+
+    // =========================================================================
+    // Canvas Provider
+    // =========================================================================
+
+    /// Register the handler for inbound `canvas.*` reverse-RPC requests.
+    ///
+    /// A single handler dispatches all canvas lifecycle verbs for this session,
+    /// switching on the request's `canvas_id`. Declare the canvases themselves
+    /// via [`SessionConfig::canvases`](crate::SessionConfig) so the runtime knows
+    /// which canvas ids this session provides.
+    pub async fn register_canvas_handler(&self, handler: Arc<dyn CanvasHandler>) {
+        let mut state = self.state.write().await;
+        state.canvas_handler = Some(handler);
+    }
+
+    /// Get the registered canvas handler, if any.
+    pub async fn canvas_handler(&self) -> Option<Arc<dyn CanvasHandler>> {
+        let state = self.state.read().await;
+        state.canvas_handler.clone()
+    }
+
+    // =========================================================================
+    // Session filesystem
+    // =========================================================================
+
+    /// Register the provider that answers inbound `sessionFs.*` reverse-RPC
+    /// requests for this session.
+    ///
+    /// Required when the client was constructed with
+    /// [`ClientOptions::session_fs`](crate::ClientOptions::session_fs).
+    pub async fn register_session_fs_provider(&self, provider: Arc<dyn SessionFsProvider>) {
+        let mut state = self.state.write().await;
+        state.session_fs_provider = Some(provider);
+    }
+
+    /// Get the registered session filesystem provider, if any.
+    pub async fn session_fs_provider(&self) -> Option<Arc<dyn SessionFsProvider>> {
+        let state = self.state.read().await;
+        state.session_fs_provider.clone()
+    }
+
+    // =========================================================================
+    // System message transforms
+    // =========================================================================
+
+    /// Register system message section transform callbacks, keyed by section id.
+    ///
+    /// Called by the client when a [`SessionConfig`](crate::SessionConfig)
+    /// declares [`SectionOverrideAction::Transform`](crate::SectionOverrideAction)
+    /// overrides. Passing an empty map clears any previously registered
+    /// callbacks.
+    pub async fn register_transform_callbacks(
+        &self,
+        callbacks: HashMap<String, SectionTransformFn>,
+    ) {
+        let mut state = self.state.write().await;
+        state.transform_callbacks = callbacks;
+    }
+
+    /// Returns the section ids that currently have a transform callback.
+    pub async fn transform_callback_ids(&self) -> Vec<String> {
+        let state = self.state.read().await;
+        let mut ids: Vec<String> = state.transform_callbacks.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Applies registered transform callbacks to the runtime-rendered system
+    /// message sections.
+    ///
+    /// Sections with no registered callback pass through unchanged. A callback
+    /// that panics is not caught here; a callback returning the original string
+    /// is the documented no-op.
+    ///
+    /// # Internal
+    ///
+    /// Invoked by the client for inbound `systemMessage.transform` requests.
+    pub async fn handle_system_message_transform(
+        &self,
+        sections: HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        let callbacks = {
+            let state = self.state.read().await;
+            state.transform_callbacks.clone()
+        };
+
+        let mut result = HashMap::with_capacity(sections.len());
+        for (section_id, content) in sections {
+            match callbacks.get(&section_id) {
+                Some(callback) => {
+                    let transformed = callback(content.clone()).await;
+                    result.insert(section_id, transformed);
+                }
+                None => {
+                    result.insert(section_id, content);
+                }
+            }
+        }
+        result
+    }
+
+    // =========================================================================
+    // UI API
+    // =========================================================================
+
+    /// Access the interactive UI (elicitation) API for this session.
+    ///
+    /// The returned [`SessionUi`] routes to `session.ui.*` RPCs and requires
+    /// host elicitation support. Check
+    /// [`capabilities().supports_elicitation()`](SessionCapabilities::supports_elicitation)
+    /// before calling its methods.
+    pub fn ui(&self) -> SessionUi<'_> {
+        SessionUi { session: self }
+    }
+
+    async fn assert_elicitation(&self) -> Result<()> {
+        let state = self.state.read().await;
+        if state.capabilities.supports_elicitation() {
+            Ok(())
+        } else {
+            Err(CopilotError::Protocol(
+                "Elicitation is not supported by the host. Check \
+                 session.capabilities().supports_elicitation() before calling UI methods."
+                    .into(),
+            ))
+        }
+    }
+
     /// Handle a `hooks.invoke` callback from the server.
     ///
     /// Dispatches to the appropriate hook handler based on `hook_type` and returns
@@ -694,7 +1113,7 @@ impl Session {
     /// Get the current model for this session.
     pub async fn get_model(&self) -> Result<String> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.model.get_current", Some(params)).await?;
+        let result = (self.invoke_fn)("session.model.getCurrent", Some(params)).await?;
         result
             .get("modelId")
             .and_then(|v| v.as_str())
@@ -709,11 +1128,32 @@ impl Session {
             "modelId": model,
         });
         if let Some(opts) = options {
-            if let Some(effort) = opts.reasoning_effort {
-                params["reasoningEffort"] = serde_json::json!(effort);
+            if let (Some(obj), Some(extra)) = (
+                params.as_object_mut(),
+                serde_json::to_value(&opts)?.as_object(),
+            ) {
+                for (key, value) in extra {
+                    obj.insert(key.clone(), value.clone());
+                }
             }
         }
-        (self.invoke_fn)("session.model.switch_to", Some(params)).await?;
+        (self.invoke_fn)("session.model.switchTo", Some(params)).await?;
+        Ok(())
+    }
+
+    /// Patch live session options via `session.options.update`.
+    ///
+    /// Only the fields you set are sent; everything else is left untouched.
+    /// Sending an empty patch is a no-op and performs no RPC.
+    pub async fn update_options(&self, options: SessionUpdateOptions) -> Result<()> {
+        if options.is_empty() {
+            return Ok(());
+        }
+        let mut params = serde_json::to_value(&options)?;
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("sessionId".into(), serde_json::json!(self.session_id));
+        }
+        (self.invoke_fn)("session.options.update", Some(params)).await?;
         Ok(())
     }
 
@@ -821,7 +1261,7 @@ impl Session {
     /// Get the currently active agent.
     pub async fn get_current_agent(&self) -> Result<Option<AgentInfo>> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.agent.get_current", Some(params)).await?;
+        let result = (self.invoke_fn)("session.agent.getCurrent", Some(params)).await?;
         if result.is_null() || result.get("name").is_none() {
             return Ok(None);
         }
@@ -854,7 +1294,7 @@ impl Session {
     /// Trigger manual context compaction.
     pub async fn compact(&self) -> Result<()> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        (self.invoke_fn)("session.compaction.compact", Some(params)).await?;
+        (self.invoke_fn)("session.history.compact", Some(params)).await?;
         Ok(())
     }
 
@@ -907,7 +1347,7 @@ impl Session {
     /// List files in the session workspace.
     pub async fn workspace_list_files(&self) -> Result<Vec<WorkspaceFile>> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.workspace.list_files", Some(params)).await?;
+        let result = (self.invoke_fn)("session.workspaces.listFiles", Some(params)).await?;
         let files = result
             .get("files")
             .cloned()
@@ -922,7 +1362,7 @@ impl Session {
             "sessionId": self.session_id,
             "path": path,
         });
-        let result = (self.invoke_fn)("session.workspace.read_file", Some(params)).await?;
+        let result = (self.invoke_fn)("session.workspaces.readFile", Some(params)).await?;
         result
             .get("content")
             .and_then(|v| v.as_str())
@@ -937,7 +1377,7 @@ impl Session {
             "path": path,
             "content": content,
         });
-        (self.invoke_fn)("session.workspace.create_file", Some(params)).await?;
+        (self.invoke_fn)("session.workspaces.createFile", Some(params)).await?;
         Ok(())
     }
 }
@@ -1067,6 +1507,138 @@ impl Session {
     }
 }
 
+// =============================================================================
+// Session UI API (elicitation)
+// =============================================================================
+
+/// Interactive UI API for a session, providing elicitation-based dialogs.
+///
+/// Acquired via [`Session::ui`]. All methods route to `session.ui.*` RPCs and
+/// require host elicitation support — check
+/// [`SessionCapabilities::supports_elicitation`] before use.
+pub struct SessionUi<'a> {
+    session: &'a Session,
+}
+
+impl SessionUi<'_> {
+    /// Request user input via an interactive UI form (elicitation).
+    ///
+    /// Sends a JSON Schema describing form fields to the CLI host. The host
+    /// renders a form dialog and returns the user's response.
+    pub async fn elicitation(
+        &self,
+        message: &str,
+        requested_schema: Value,
+    ) -> Result<ElicitationResult> {
+        self.session.assert_elicitation().await?;
+        let params = serde_json::json!({
+            "sessionId": self.session.session_id,
+            "message": message,
+            "requestedSchema": requested_schema,
+        });
+        let result = (self.session.invoke_fn)("session.ui.elicitation", Some(params)).await?;
+        Ok(serde_json::from_value(result)?)
+    }
+
+    /// Ask the user a yes/no confirmation question.
+    ///
+    /// Returns `true` only if the user accepted and confirmed.
+    pub async fn confirm(&self, message: &str) -> Result<bool> {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "confirmed": { "type": "boolean", "default": true }
+            },
+            "required": ["confirmed"]
+        });
+        let result = self.elicitation(message, schema).await?;
+        Ok(result.is_accept()
+            && result
+                .content
+                .as_ref()
+                .and_then(|c| c.get("confirmed"))
+                .and_then(|v| v.as_bool())
+                == Some(true))
+    }
+
+    /// Show a selection dialog with the given options.
+    ///
+    /// Returns the selected value, or `None` if the user declined/cancelled.
+    pub async fn select(&self, message: &str, options: &[String]) -> Result<Option<String>> {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "selection": { "type": "string", "enum": options }
+            },
+            "required": ["selection"]
+        });
+        let result = self.elicitation(message, schema).await?;
+        if result.is_accept() {
+            if let Some(sel) = result
+                .content
+                .as_ref()
+                .and_then(|c| c.get("selection"))
+                .and_then(|v| v.as_str())
+            {
+                return Ok(Some(sel.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Show a text input dialog.
+    ///
+    /// Returns the entered text, or `None` if the user declined/cancelled.
+    pub async fn input(
+        &self,
+        message: &str,
+        options: Option<&UiInputOptions>,
+    ) -> Result<Option<String>> {
+        let mut field = serde_json::Map::new();
+        field.insert("type".to_string(), Value::String("string".to_string()));
+        if let Some(opts) = options {
+            if let Some(title) = &opts.title {
+                field.insert("title".to_string(), Value::String(title.clone()));
+            }
+            if let Some(description) = &opts.description {
+                field.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
+            }
+            if let Some(min) = opts.min_length {
+                field.insert("minLength".to_string(), Value::from(min));
+            }
+            if let Some(max) = opts.max_length {
+                field.insert("maxLength".to_string(), Value::from(max));
+            }
+            if let Some(format) = &opts.format {
+                field.insert("format".to_string(), Value::String(format.clone()));
+            }
+            if let Some(default) = &opts.default {
+                field.insert("default".to_string(), Value::String(default.clone()));
+            }
+        }
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "value": Value::Object(field) },
+            "required": ["value"]
+        });
+        let result = self.elicitation(message, schema).await?;
+        if result.is_accept() {
+            if let Some(val) = result
+                .content
+                .as_ref()
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_str())
+            {
+                return Ok(Some(val.to_string()));
+            }
+        }
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,6 +1679,18 @@ mod tests {
             mock_invoke,
         );
         assert_eq!(session.workspace_path(), Some("/tmp/workspace"));
+    }
+
+    #[tokio::test]
+    async fn test_lsp_server_config() {
+        let session = Session::new(
+            "session-for-lsp".to_string(),
+            Some("/tmp/workspace".to_string()),
+            mock_invoke,
+        );
+        let config = session.lsp_server_config();
+        assert_eq!(config.session_id.as_deref(), Some("session-for-lsp"));
+        assert_eq!(config.workspace_root.as_deref(), Some("/tmp/workspace"));
     }
 
     #[tokio::test]
@@ -1504,5 +2088,263 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_null());
+    }
+
+    // =========================================================================
+    // Wave 2: capabilities / elicitation / UI tests
+    // =========================================================================
+
+    fn mock_invoke_elicitation_accept(method: &str, _params: Option<Value>) -> InvokeFuture {
+        let method = method.to_string();
+        Box::pin(async move {
+            if method == "session.ui.elicitation" {
+                return Ok(serde_json::json!({
+                    "action": "accept",
+                    "content": { "confirmed": true, "selection": "b", "value": "typed" }
+                }));
+            }
+            Ok(serde_json::json!({}))
+        })
+    }
+
+    fn supported_caps() -> crate::types::SessionCapabilities {
+        crate::types::SessionCapabilities {
+            ui: Some(crate::types::UiCapabilities {
+                elicitation: Some(true),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_default_and_set() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        assert!(!session.capabilities().await.supports_elicitation());
+
+        session.set_capabilities(supported_caps()).await;
+        assert!(session.capabilities().await.supports_elicitation());
+    }
+
+    #[tokio::test]
+    async fn test_ui_elicitation_requires_capability() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        let err = session.ui().confirm("Proceed?").await;
+        assert!(matches!(err, Err(CopilotError::Protocol(_))));
+    }
+
+    #[tokio::test]
+    async fn test_ui_confirm_accept() {
+        let session = Session::new("test".to_string(), None, mock_invoke_elicitation_accept);
+        session.set_capabilities(supported_caps()).await;
+        assert!(session.ui().confirm("Proceed?").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_ui_select_returns_choice() {
+        let session = Session::new("test".to_string(), None, mock_invoke_elicitation_accept);
+        session.set_capabilities(supported_caps()).await;
+        let choice = session
+            .ui()
+            .select("Pick", &["a".to_string(), "b".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(choice.as_deref(), Some("b"));
+    }
+
+    #[tokio::test]
+    async fn test_ui_input_returns_text() {
+        let session = Session::new("test".to_string(), None, mock_invoke_elicitation_accept);
+        session.set_capabilities(supported_caps()).await;
+        let value = session.ui().input("Name?", None).await.unwrap();
+        assert_eq!(value.as_deref(), Some("typed"));
+    }
+
+    #[tokio::test]
+    async fn test_elicitation_result_helpers() {
+        let cancelled = crate::types::ElicitationResult::cancel();
+        assert!(!cancelled.is_accept());
+        assert_eq!(cancelled.action, "cancel");
+
+        let accepted = crate::types::ElicitationResult {
+            action: "accept".to_string(),
+            content: None,
+        };
+        assert!(accepted.is_accept());
+    }
+
+    #[tokio::test]
+    async fn test_register_and_unregister_command() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        session.register_command("deploy", |_ctx| {}).await;
+        {
+            let state = session.state.read().await;
+            assert!(state.command_handlers.contains_key("deploy"));
+        }
+        session.unregister_command("deploy").await;
+        let state = session.state.read().await;
+        assert!(!state.command_handlers.contains_key("deploy"));
+    }
+
+    #[tokio::test]
+    async fn test_register_wave2_handlers() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        session
+            .register_elicitation_handler(|_ctx| crate::types::ElicitationResult::cancel())
+            .await;
+        session
+            .register_exit_plan_mode_handler(|_req| crate::types::ExitPlanModeResult::default())
+            .await;
+        session
+            .register_auto_mode_switch_handler(|_req| crate::types::AutoModeSwitchResponse::No)
+            .await;
+        let state = session.state.read().await;
+        assert!(state.elicitation_handler.is_some());
+        assert!(state.exit_plan_mode_handler.is_some());
+        assert!(state.auto_mode_switch_handler.is_some());
+    }
+
+    struct TestCanvasHandler;
+    impl crate::canvas::CanvasHandler for TestCanvasHandler {
+        fn on_open(
+            &self,
+            request: crate::canvas::CanvasOpenRequest,
+        ) -> std::result::Result<crate::canvas::CanvasOpenResult, crate::canvas::CanvasError>
+        {
+            Ok(crate::canvas::CanvasOpenResult {
+                status: Some(format!("opened:{}", request.canvas_id)),
+                title: None,
+            })
+        }
+
+        fn on_action(
+            &self,
+            request: crate::canvas::CanvasInvokeActionRequest,
+        ) -> std::result::Result<Value, crate::canvas::CanvasError> {
+            Ok(serde_json::json!({ "action": request.action_name }))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_canvas_handler() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        assert!(session.canvas_handler().await.is_none());
+
+        session
+            .register_canvas_handler(Arc::new(TestCanvasHandler))
+            .await;
+        let handler = session.canvas_handler().await;
+        assert!(handler.is_some());
+
+        let result = handler
+            .unwrap()
+            .on_open(crate::canvas::CanvasOpenRequest {
+                session_id: "test".to_string(),
+                canvas_id: "charts".to_string(),
+                instance_id: "i1".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.status.as_deref(), Some("opened:charts"));
+    }
+
+    // =========================================================================
+    // Session filesystem + system message transform
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_session_fs_provider_registration() {
+        struct Noop;
+        impl crate::session_fs::SessionFsProvider for Noop {
+            fn read_file<'a>(
+                &'a self,
+                _path: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, String> {
+                Box::pin(async { Ok(String::new()) })
+            }
+            fn write_file<'a>(
+                &'a self,
+                _path: &'a str,
+                _content: &'a str,
+                _mode: Option<u32>,
+            ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+                Box::pin(async { Ok(()) })
+            }
+            fn exists<'a>(
+                &'a self,
+                _path: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, bool> {
+                Box::pin(async { Ok(false) })
+            }
+            fn stat<'a>(
+                &'a self,
+                path: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, crate::session_fs::SessionFsFileInfo>
+            {
+                Box::pin(async move { Err(crate::session_fs::SessionFsError::not_found(path)) })
+            }
+            fn readdir<'a>(
+                &'a self,
+                _path: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, Vec<String>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+            fn readdir_with_types<'a>(
+                &'a self,
+                _path: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, Vec<crate::session_fs::SessionFsDirEntry>>
+            {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+            fn mkdir<'a>(
+                &'a self,
+                _path: &'a str,
+                _recursive: bool,
+                _mode: Option<u32>,
+            ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+                Box::pin(async { Ok(()) })
+            }
+            fn rm<'a>(
+                &'a self,
+                _path: &'a str,
+                _recursive: bool,
+                _force: bool,
+            ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+                Box::pin(async { Ok(()) })
+            }
+            fn rename<'a>(
+                &'a self,
+                _src: &'a str,
+                _dest: &'a str,
+            ) -> crate::session_fs::SessionFsFuture<'a, ()> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let session = Session::new("s".to_string(), None, mock_invoke);
+        assert!(session.session_fs_provider().await.is_none());
+        session.register_session_fs_provider(Arc::new(Noop)).await;
+        assert!(session.session_fs_provider().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_transform_callbacks_are_registered_and_applied() {
+        let session = Session::new("s".to_string(), None, mock_invoke);
+        assert!(session.transform_callback_ids().await.is_empty());
+
+        let mut callbacks: HashMap<String, SectionTransformFn> = HashMap::new();
+        callbacks.insert(
+            "identity".to_string(),
+            Arc::new(|content: String| Box::pin(async move { format!("<{content}>") }) as _),
+        );
+        session.register_transform_callbacks(callbacks).await;
+        assert_eq!(session.transform_callback_ids().await, vec!["identity"]);
+
+        let mut input = HashMap::new();
+        input.insert("identity".to_string(), "core".to_string());
+        input.insert("tone".to_string(), "untouched".to_string());
+
+        let out = session.handle_system_message_transform(input).await;
+        assert_eq!(out.get("identity").unwrap(), "<core>");
+        assert_eq!(out.get("tone").unwrap(), "untouched");
     }
 }

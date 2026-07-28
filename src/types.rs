@@ -46,6 +46,7 @@ pub enum ConnectionState {
 pub enum SystemMessageMode {
     Append,
     Replace,
+    Customize,
 }
 
 /// Attachment type for user messages.
@@ -227,11 +228,283 @@ impl PermissionRequestResult {
     pub fn is_denied(&self) -> bool {
         self.kind.starts_with("denied")
     }
+
+    /// Approve this single request without creating a persistent rule.
+    /// Wire kind: `approve-once`.
+    pub fn approve_once() -> Self {
+        Self {
+            kind: "approve-once".to_string(),
+            rules: None,
+        }
+    }
+
+    /// Reject this request. Wire kind: `reject`.
+    pub fn reject() -> Self {
+        Self {
+            kind: "reject".to_string(),
+            rules: None,
+        }
+    }
+
+    /// Decline to decide, deferring to the host's default handling.
+    /// Wire kind: `no-result`.
+    pub fn no_result() -> Self {
+        Self {
+            kind: "no-result".to_string(),
+            rules: None,
+        }
+    }
+}
+
+/// Permission handler that approves every request once (never persisting a
+/// rule). Mirrors the Node.js `approveAll` helper. Convenient for trusted,
+/// non-interactive automation.
+pub fn approve_all(_request: &PermissionRequest) -> PermissionRequestResult {
+    PermissionRequestResult::approve_once()
+}
+
+/// Default permission handler used by `join_session`: returns `no-result`,
+/// deferring the decision to the host session that owns the permission prompt.
+/// Mirrors the Node.js `defaultJoinSessionPermissionHandler`.
+pub fn default_join_session_permission_handler(
+    _request: &PermissionRequest,
+) -> PermissionRequestResult {
+    PermissionRequestResult::no_result()
 }
 
 // =============================================================================
 // Configuration Types
 // =============================================================================
+
+/// Known system message section identifiers for the "customize" mode. Each
+/// corresponds to a distinct part of the system prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemMessageSection {
+    /// Agent identity preamble and mode statement.
+    Identity,
+    /// Response style, conciseness rules, output formatting preferences.
+    Tone,
+    /// Tool usage patterns, parallel calling, batching guidelines.
+    ToolEfficiency,
+    /// CWD, OS, git root, directory listing, available tools.
+    EnvironmentContext,
+    /// Coding rules, linting/testing, ecosystem tools, style.
+    CodeChangeRules,
+    /// Tips, behavioral best practices, behavioral guidelines.
+    Guidelines,
+    /// Environment limitations, prohibited actions, security policies.
+    Safety,
+    /// Per-tool usage instructions.
+    ToolInstructions,
+    /// Repository and organization custom instructions.
+    CustomInstructions,
+    /// Runtime-provided context and instructions.
+    RuntimeInstructions,
+    /// End-of-prompt instructions: parallel tool calling, persistence, task completion.
+    LastInstructions,
+}
+
+impl SystemMessageSection {
+    /// All known sections, in system-prompt order.
+    pub const ALL: &'static [SystemMessageSection] = &[
+        SystemMessageSection::Identity,
+        SystemMessageSection::Tone,
+        SystemMessageSection::ToolEfficiency,
+        SystemMessageSection::EnvironmentContext,
+        SystemMessageSection::CodeChangeRules,
+        SystemMessageSection::Guidelines,
+        SystemMessageSection::Safety,
+        SystemMessageSection::ToolInstructions,
+        SystemMessageSection::CustomInstructions,
+        SystemMessageSection::RuntimeInstructions,
+        SystemMessageSection::LastInstructions,
+    ];
+
+    /// The wire section id (e.g. `tool_efficiency`).
+    pub fn id(self) -> &'static str {
+        match self {
+            SystemMessageSection::Identity => "identity",
+            SystemMessageSection::Tone => "tone",
+            SystemMessageSection::ToolEfficiency => "tool_efficiency",
+            SystemMessageSection::EnvironmentContext => "environment_context",
+            SystemMessageSection::CodeChangeRules => "code_change_rules",
+            SystemMessageSection::Guidelines => "guidelines",
+            SystemMessageSection::Safety => "safety",
+            SystemMessageSection::ToolInstructions => "tool_instructions",
+            SystemMessageSection::CustomInstructions => "custom_instructions",
+            SystemMessageSection::RuntimeInstructions => "runtime_instructions",
+            SystemMessageSection::LastInstructions => "last_instructions",
+        }
+    }
+
+    /// Human-readable description of the section, for documentation and tooling.
+    pub fn description(self) -> &'static str {
+        match self {
+            SystemMessageSection::Identity => "Agent identity preamble and mode statement",
+            SystemMessageSection::Tone => {
+                "Response style, conciseness rules, output formatting preferences"
+            }
+            SystemMessageSection::ToolEfficiency => {
+                "Tool usage patterns, parallel calling, batching guidelines"
+            }
+            SystemMessageSection::EnvironmentContext => {
+                "CWD, OS, git root, directory listing, available tools"
+            }
+            SystemMessageSection::CodeChangeRules => {
+                "Coding rules, linting/testing, ecosystem tools, style"
+            }
+            SystemMessageSection::Guidelines => {
+                "Tips, behavioral best practices, behavioral guidelines"
+            }
+            SystemMessageSection::Safety => {
+                "Environment limitations, prohibited actions, security policies"
+            }
+            SystemMessageSection::ToolInstructions => "Per-tool usage instructions",
+            SystemMessageSection::CustomInstructions => {
+                "Repository and organization custom instructions"
+            }
+            SystemMessageSection::RuntimeInstructions => {
+                "Runtime-provided context and instructions (e.g. system notifications, memories, workspace context, mode-specific instructions, content-exclusion policy)"
+            }
+            SystemMessageSection::LastInstructions => {
+                "End-of-prompt instructions: parallel tool calling, persistence, task completion"
+            }
+        }
+    }
+}
+
+/// Returns section metadata (id + description) for all system message sections.
+pub fn system_message_sections() -> Vec<(SystemMessageSection, &'static str)> {
+    SystemMessageSection::ALL
+        .iter()
+        .map(|s| (*s, s.description()))
+        .collect()
+}
+
+/// The operation applied to a single system message section in "customize" mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SectionOverrideAction {
+    /// Replace section content entirely.
+    Replace,
+    /// Remove the section.
+    Remove,
+    /// Append to existing section content.
+    Append,
+    /// Prepend to existing section content.
+    Prepend,
+    /// Run a client-side callback over the section's rendered content.
+    ///
+    /// The runtime sends the section back to the client via a
+    /// `systemMessage.transform` request; the SDK invokes the callback stored
+    /// on [`SectionOverride::transform`] and returns the transformed text.
+    Transform,
+}
+
+/// Boxed future returned by a [`SectionTransformFn`].
+pub type SectionTransformFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>>;
+
+/// Callback that rewrites a system message section's rendered content.
+pub type SectionTransformFn = Arc<dyn Fn(String) -> SectionTransformFuture + Send + Sync>;
+
+/// Override operation for a single system message section.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionOverride {
+    /// The operation to perform on this section.
+    pub action: SectionOverrideAction,
+    /// Content for the override. Optional for all actions; ignored for `remove`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Callback invoked when `action` is [`SectionOverrideAction::Transform`].
+    ///
+    /// Never serialized: only the `"transform"` action marker crosses the wire,
+    /// and the runtime calls back into the client to apply it.
+    #[serde(skip)]
+    pub transform: Option<SectionTransformFn>,
+}
+
+impl std::fmt::Debug for SectionOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SectionOverride")
+            .field("action", &self.action)
+            .field("content", &self.content)
+            .field("transform", &self.transform.as_ref().map(|_| "Fn(...)"))
+            .finish()
+    }
+}
+
+impl SectionOverride {
+    /// Replace the section content with `content`.
+    pub fn replace(content: impl Into<String>) -> Self {
+        Self {
+            action: SectionOverrideAction::Replace,
+            content: Some(content.into()),
+            transform: None,
+        }
+    }
+
+    /// Remove the section.
+    pub fn remove() -> Self {
+        Self {
+            action: SectionOverrideAction::Remove,
+            content: None,
+            transform: None,
+        }
+    }
+
+    /// Append `content` to the section.
+    pub fn append(content: impl Into<String>) -> Self {
+        Self {
+            action: SectionOverrideAction::Append,
+            content: Some(content.into()),
+            transform: None,
+        }
+    }
+
+    /// Prepend `content` to the section.
+    pub fn prepend(content: impl Into<String>) -> Self {
+        Self {
+            action: SectionOverrideAction::Prepend,
+            content: Some(content.into()),
+            transform: None,
+        }
+    }
+
+    /// Transform the rendered section content with a client-side callback.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use copilot_sdk::SectionOverride;
+    ///
+    /// let override_ = SectionOverride::transform(|content| {
+    ///     Box::pin(async move { content.to_uppercase() })
+    /// });
+    /// ```
+    pub fn transform<F>(callback: F) -> Self
+    where
+        F: Fn(String) -> SectionTransformFuture + Send + Sync + 'static,
+    {
+        Self {
+            action: SectionOverrideAction::Transform,
+            content: None,
+            transform: Some(Arc::new(callback)),
+        }
+    }
+
+    /// Returns the transform callback when this override uses
+    /// [`SectionOverrideAction::Transform`].
+    pub fn transform_fn(&self) -> Option<&SectionTransformFn> {
+        if self.action == SectionOverrideAction::Transform {
+            self.transform.as_ref()
+        } else {
+            None
+        }
+    }
+}
 
 /// System message configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -241,6 +514,384 @@ pub struct SystemMessageConfig {
     pub mode: Option<SystemMessageMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Section-level overrides, used with [`SystemMessageMode::Customize`].
+    /// Keyed by the section id (e.g. `tool_efficiency`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<HashMap<String, SectionOverride>>,
+}
+
+impl SystemMessageConfig {
+    /// Append-mode config with additional instructions.
+    pub fn append(content: impl Into<String>) -> Self {
+        Self {
+            mode: Some(SystemMessageMode::Append),
+            content: Some(content.into()),
+            sections: None,
+        }
+    }
+
+    /// Replace-mode config with a complete system message.
+    pub fn replace(content: impl Into<String>) -> Self {
+        Self {
+            mode: Some(SystemMessageMode::Replace),
+            content: Some(content.into()),
+            sections: None,
+        }
+    }
+
+    /// Customize-mode config with per-section overrides.
+    pub fn customize(sections: HashMap<String, SectionOverride>) -> Self {
+        Self {
+            mode: Some(SystemMessageMode::Customize),
+            content: None,
+            sections: Some(sections),
+        }
+    }
+
+    /// Add or replace a section override, returning `self` for chaining.
+    pub fn with_section(
+        mut self,
+        section: SystemMessageSection,
+        override_: SectionOverride,
+    ) -> Self {
+        self.mode.get_or_insert(SystemMessageMode::Customize);
+        self.sections
+            .get_or_insert_with(HashMap::new)
+            .insert(section.id().to_string(), override_);
+        self
+    }
+}
+
+/// Stable extension identity for session participants that provide canvases.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionInfo {
+    /// Extension namespace/source, e.g. `github-app`.
+    pub source: String,
+    /// Stable provider name within the source namespace.
+    pub name: String,
+}
+
+/// Configuration for large tool-output handling.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeToolOutputConfig {
+    /// Whether large output handling is enabled (default `true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Maximum size in bytes before output is written to a temp file (default `51200`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size_bytes: Option<u64>,
+    /// Directory to write temp files to. Defaults to the OS temp directory.
+    ///
+    /// Serialized as `outputDir` to match the runtime wire contract.
+    #[serde(rename = "outputDir", skip_serializing_if = "Option::is_none")]
+    pub output_directory: Option<String>,
+}
+
+/// Reasoning summary mode for models with configurable reasoning summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    /// Do not request reasoning summaries from the model.
+    None,
+    /// Request a concise summary of the model's reasoning.
+    Concise,
+    /// Request a detailed summary of the model's reasoning.
+    Detailed,
+}
+
+/// Vision-specific limit overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCapabilitiesOverrideLimitsVision {
+    /// MIME types the model accepts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_media_types: Option<Vec<String>>,
+    /// Maximum number of images per prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_prompt_images: Option<u64>,
+    /// Maximum image size in bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_prompt_image_size: Option<u64>,
+}
+
+/// Token-limit overrides for prompts, outputs, and the context window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCapabilitiesOverrideLimits {
+    /// Maximum number of prompt/input tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_prompt_tokens: Option<u64>,
+    /// Maximum number of output/completion tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// Maximum total context window size in tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_context_window_tokens: Option<u64>,
+    /// Vision-specific limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<ModelCapabilitiesOverrideLimitsVision>,
+}
+
+/// Feature flags indicating what the model supports.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCapabilitiesOverrideSupports {
+    /// Whether this model supports vision/image input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Whether this model supports reasoning effort configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<bool>,
+}
+
+/// Partial override of a model's advertised capabilities.
+///
+/// Useful for BYOK providers whose capabilities the runtime cannot discover.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCapabilitiesOverride {
+    /// Feature flags indicating what the model supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports: Option<ModelCapabilitiesOverrideSupports>,
+    /// Token limits for prompts, outputs, and context window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<ModelCapabilitiesOverrideLimits>,
+}
+
+/// Configuration applied to the session's default agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultAgentConfig {
+    /// Tool names to exclude from the default agent.
+    ///
+    /// Excluded tools remain available to custom sub-agents that list them in
+    /// their `tools` array, which keeps the default agent's context clean.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_tools: Option<Vec<String>>,
+}
+
+/// Remote session export and steering mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteSessionMode {
+    /// Disable remote session export and steering.
+    #[default]
+    Off,
+    /// Export session events to GitHub without enabling remote steering.
+    Export,
+    /// Enable both remote session export and remote steering.
+    On,
+}
+
+/// Where the runtime persists a given class of credentials or caches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageMode {
+    /// Persist to disk across sessions.
+    #[default]
+    Persistent,
+    /// Keep in memory only; discarded when the session ends.
+    InMemory,
+}
+
+/// Repository a cloud session is bound to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSessionRepository {
+    /// Repository owner (user or organization).
+    pub owner: String,
+    /// Repository name.
+    pub name: String,
+    /// Branch to work against. Defaults to the repository default branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+/// Options for creating a remote session in the cloud.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSessionOptions {
+    /// Repository the cloud session operates on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<CloudSessionRepository>,
+}
+
+/// A plugin installed into a session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInstalledPlugin {
+    /// Plugin identifier.
+    pub id: String,
+    /// Absolute path to the plugin root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Whether the plugin is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+/// Patch applied to a live session via `session.options.update`.
+///
+/// Every field is optional: only the fields you set are sent, and the runtime
+/// leaves everything else untouched.
+///
+/// # Example
+///
+/// ```no_run
+/// use copilot_sdk::SessionUpdateOptions;
+///
+/// # async fn run(session: &copilot_sdk::Session) -> copilot_sdk::Result<()> {
+/// session
+///     .update_options(SessionUpdateOptions {
+///         coauthor_enabled: Some(false),
+///         skip_custom_instructions: Some(true),
+///         ..Default::default()
+///     })
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUpdateOptions {
+    /// Model ID to use for assistant turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort for the selected model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Identifier of the client driving the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
+    /// Identifier sent to LSP-style integrations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lsp_client_name: Option<String>,
+    /// Stable integration identifier for analytics and rate-limit attribution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration_id: Option<String>,
+    /// Feature-flag IDs mapped to their enabled state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_flags: Option<HashMap<String, bool>>,
+    /// Whether experimental capabilities are enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_experimental_mode: Option<bool>,
+    /// Custom model-provider configuration (BYOK).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<serde_json::Value>,
+    /// Absolute working-directory path for shell tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+    /// Allowlist of tool names available to this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<String>>,
+    /// Denylist of tool names for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_tools: Option<Vec<String>>,
+    /// Which filter wins when a tool appears in both lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_filter_precedence: Option<String>,
+    /// Whether shell-script safety heuristics are enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_script_safety: Option<bool>,
+    /// Shell init profile (`None` or `NonInteractive`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_init_profile: Option<String>,
+    /// Per-shell process flags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_process_flags: Option<Vec<String>>,
+    /// Sandbox configuration; opaque to SDK consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_config: Option<serde_json::Value>,
+    /// Whether interactive shell sessions are logged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_interactive_shells: Option<bool>,
+    /// How environment values are transmitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_value_mode: Option<String>,
+    /// Additional directories to search for skills.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_directories: Option<Vec<String>>,
+    /// Skill IDs excluded from this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_skills: Option<Vec<String>>,
+    /// Discover custom instructions on demand after successful file views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_on_demand_instruction_discovery: Option<bool>,
+    /// Full set of installed plugins; replaces the existing list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_plugins: Option<Vec<SessionInstalledPlugin>>,
+    /// Default custom agents to local-only execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_agents_local_only: Option<bool>,
+    /// Skip loading custom instruction sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_custom_instructions: Option<bool>,
+    /// Instruction source IDs excluded from the system prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_instruction_sources: Option<Vec<String>>,
+    /// Include the `Co-authored-by` trailer in commit messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coauthor_enabled: Option<bool>,
+    /// Path for trajectory output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trajectory_file: Option<String>,
+    /// Stream model responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_streaming: Option<bool>,
+    /// Override URL for the Copilot API endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copilot_url: Option<String>,
+    /// Disable the `ask_user` tool to encourage autonomous behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_user_disabled: Option<bool>,
+    /// Allow auto-mode continuation across turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continue_on_auto_mode: Option<bool>,
+    /// Whether the session is running in an interactive UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_in_interactive_mode: Option<bool>,
+    /// Surface reasoning-summary events from the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_reasoning_summaries: Option<bool>,
+    /// Runtime context discriminator (e.g. `cli`, `actions`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_context: Option<String>,
+    /// Override directory for the session-events log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_log_directory: Option<String>,
+    /// Additional content-exclusion policies merged into the session policy set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_content_exclusion_policies: Option<Vec<serde_json::Value>>,
+    /// Expose the `manage_schedule` tool to the agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manage_schedule_enabled: Option<bool>,
+    /// Skip embedding-retrieval pipeline initialization and execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_embedding_retrieval: Option<bool>,
+    /// Organization-level custom instructions injected into the system prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_custom_instructions: Option<String>,
+    /// Enable loading of `.github/hooks/` filesystem hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_file_hooks: Option<bool>,
+    /// Enable host git operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_host_git_operations: Option<bool>,
+    /// Enable cross-session store reads and writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_session_store: Option<bool>,
+    /// Enable skill directory scanning and loading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_skills: Option<bool>,
+}
+
+impl SessionUpdateOptions {
+    /// Returns `true` when no field is set, meaning there is nothing to send.
+    pub fn is_empty(&self) -> bool {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_object().map(|o| o.is_empty()))
+            .unwrap_or(true)
+    }
 }
 
 /// Azure-specific provider options.
@@ -827,6 +1478,252 @@ impl std::fmt::Debug for SessionHooks {
 // Session Configuration
 // =============================================================================
 
+// =============================================================================
+// Session Capabilities (host-reported)
+// =============================================================================
+
+/// UI capabilities reported by the CLI host for a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiCapabilities {
+    /// Whether the host supports interactive elicitation dialogs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<bool>,
+    /// Whether the runtime accepted the session's MCP Apps (SEP-1865) opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_apps: Option<bool>,
+    /// Whether the host supports canvas rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvases: Option<bool>,
+}
+
+/// Capabilities reported by the CLI host for a session.
+///
+/// Populated from the `session.create` / `session.resume` response. Check the
+/// relevant capability before invoking host-gated APIs such as
+/// [`Session::ui`](crate::Session::ui).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCapabilities {
+    /// UI capabilities, when reported by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiCapabilities>,
+}
+
+impl SessionCapabilities {
+    /// Returns `true` if the host reported support for interactive elicitation.
+    pub fn supports_elicitation(&self) -> bool {
+        self.ui
+            .as_ref()
+            .and_then(|ui| ui.elicitation)
+            .unwrap_or(false)
+    }
+
+    /// Returns `true` if the host reported support for canvas rendering.
+    pub fn supports_canvases(&self) -> bool {
+        self.ui.as_ref().and_then(|ui| ui.canvases).unwrap_or(false)
+    }
+}
+
+// =============================================================================
+// UI Elicitation
+// =============================================================================
+
+/// Elicitation mode: structured form input or browser redirect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElicitationMode {
+    /// Structured form input.
+    Form,
+    /// Browser redirect (URL mode).
+    Url,
+}
+
+/// Result returned from an elicitation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElicitationResult {
+    /// User action: `accept` (submitted), `decline` (rejected), or `cancel` (dismissed).
+    pub action: String,
+    /// Form values submitted by the user (present when action is `accept`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl ElicitationResult {
+    /// Construct a `cancel` result (used as a fallback when a handler fails).
+    pub fn cancel() -> Self {
+        Self {
+            action: "cancel".to_string(),
+            content: None,
+        }
+    }
+
+    /// Returns `true` if the user accepted (submitted) the form.
+    pub fn is_accept(&self) -> bool {
+        self.action == "accept"
+    }
+}
+
+/// Parameters for a raw elicitation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationParams {
+    /// Message describing what information is needed from the user.
+    pub message: String,
+    /// JSON Schema describing the form fields to present.
+    pub requested_schema: serde_json::Value,
+}
+
+/// Context for an elicitation handler invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationContext {
+    /// Identifier of the session that triggered the elicitation request.
+    pub session_id: String,
+    /// Message describing what information is needed from the user.
+    pub message: String,
+    /// JSON Schema describing the form fields to present (form mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_schema: Option<serde_json::Value>,
+    /// Elicitation mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ElicitationMode>,
+    /// The source that initiated the request (e.g. an MCP server name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation_source: Option<String>,
+    /// URL to open in the user's browser (url mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// Options for the [`SessionUi::input`](crate::SessionUi::input) convenience method.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UiInputOptions {
+    /// Title label for the input field.
+    pub title: Option<String>,
+    /// Descriptive text shown below the field.
+    pub description: Option<String>,
+    /// Minimum character length.
+    pub min_length: Option<u64>,
+    /// Maximum character length.
+    pub max_length: Option<u64>,
+    /// Semantic format hint (`email`, `uri`, `date`, `date-time`).
+    pub format: Option<String>,
+    /// Default value pre-populated in the field.
+    pub default: Option<String>,
+}
+
+// =============================================================================
+// Exit Plan Mode
+// =============================================================================
+
+/// Request to exit plan mode, awaiting the user's approval decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitPlanModeRequest {
+    /// Summary of the plan or proposed next step.
+    pub summary: String,
+    /// Full plan content, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_content: Option<String>,
+    /// Available actions the user can select.
+    #[serde(default)]
+    pub actions: Vec<String>,
+    /// The action recommended by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_action: Option<String>,
+}
+
+/// Response to an exit-plan-mode request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitPlanModeResult {
+    /// Whether the user approved exiting plan mode.
+    pub approved: bool,
+    /// Selected action, if the user chose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_action: Option<String>,
+    /// Optional feedback provided by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+}
+
+impl Default for ExitPlanModeResult {
+    fn default() -> Self {
+        Self {
+            approved: true,
+            selected_action: None,
+            feedback: None,
+        }
+    }
+}
+
+// =============================================================================
+// Auto Mode Switch
+// =============================================================================
+
+/// Request to switch to auto mode after an eligible rate limit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeSwitchRequest {
+    /// The rate-limit error code that triggered the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Seconds until the rate limit resets, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<i64>,
+}
+
+/// Response to an auto-mode-switch request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoModeSwitchResponse {
+    /// Allow the switch for this turn only.
+    Yes,
+    /// Allow the switch and persist it as a setting.
+    YesAlways,
+    /// Decline the switch.
+    No,
+}
+
+impl Default for AutoModeSwitchResponse {
+    fn default() -> Self {
+        Self::No
+    }
+}
+
+// =============================================================================
+// Slash Commands
+// =============================================================================
+
+/// Context passed to a registered command handler when the user invokes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandContext {
+    /// Session ID where the command was invoked.
+    pub session_id: String,
+    /// The full command text (e.g. `/deploy production`).
+    pub command: String,
+    /// Command name without the leading `/`.
+    pub command_name: String,
+    /// Raw argument string after the command name.
+    pub args: String,
+}
+
+/// A slash-command declaration serialized to the CLI at session create/resume.
+///
+/// The handler is registered separately via
+/// [`Session::register_command`](crate::Session::register_command).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandDeclaration {
+    /// Command name (without leading `/`).
+    pub name: String,
+    /// Human-readable description shown in command completion UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Configuration for creating a new session.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -884,6 +1781,17 @@ pub struct SessionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
 
+    /// Slash-command declarations advertised to the CLI (TUI completion).
+    /// Register the matching handlers via [`Session::register_command`](crate::Session::register_command).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<CommandDeclaration>>,
+
+    /// Canvas declarations provided by this session, sent on `session.create`.
+    /// Register the dispatch handler via
+    /// [`Session::register_canvas_handler`](crate::Session::register_canvas_handler).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canvases: Option<Vec<crate::canvas::CanvasDeclaration>>,
+
     /// Session hooks for pre/post tool use, session lifecycle, etc.
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
@@ -893,6 +1801,161 @@ pub struct SessionConfig {
     /// Default: false (explicit configuration preferred over environment variables)
     #[serde(skip)]
     pub auto_byok_from_env: bool,
+
+    // =========================================================================
+    // Model behaviour
+    // =========================================================================
+    /// Reasoning summary mode for models that support configurable summaries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummary>,
+
+    /// Override the runtime's view of the model's capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_capabilities: Option<ModelCapabilitiesOverride>,
+
+    /// Large tool-output handling.
+    #[serde(rename = "largeOutput", skip_serializing_if = "Option::is_none")]
+    pub large_output: Option<LargeToolOutputConfig>,
+
+    // =========================================================================
+    // Reverse-RPC opt-ins
+    // =========================================================================
+    /// Request `elicitation.request` callbacks from the runtime.
+    ///
+    /// Register the handler with
+    /// [`Session::register_elicitation_handler`](crate::Session::register_elicitation_handler).
+    #[serde(rename = "requestElicitation", skip_serializing_if = "Option::is_none")]
+    pub request_elicitation: Option<bool>,
+
+    /// Request `exitPlanMode.request` callbacks from the runtime.
+    #[serde(
+        rename = "requestExitPlanMode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_exit_plan_mode: Option<bool>,
+
+    /// Request `autoModeSwitch.request` callbacks from the runtime.
+    #[serde(
+        rename = "requestAutoModeSwitch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_auto_mode_switch: Option<bool>,
+
+    /// Enable MCP apps support (sent on the wire as `requestMcpApps`).
+    #[serde(rename = "requestMcpApps", skip_serializing_if = "Option::is_none")]
+    pub enable_mcp_apps: Option<bool>,
+
+    /// Request the canvas renderer capability from the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_canvas_renderer: Option<bool>,
+
+    /// Request extension participation in this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_extensions: Option<bool>,
+
+    /// Stable extension identity for sessions that provide canvases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_info: Option<ExtensionInfo>,
+
+    // =========================================================================
+    // Discovery and storage
+    // =========================================================================
+    /// Enable config-file discovery from the config directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_config_discovery: Option<bool>,
+
+    /// Emit session telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_session_telemetry: Option<bool>,
+
+    /// Include streaming events emitted by sub-agents. Defaults to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_sub_agent_streaming_events: Option<bool>,
+
+    /// Where MCP OAuth tokens are stored.
+    #[serde(
+        rename = "mcpOAuthTokenStorage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mcp_oauth_token_storage: Option<StorageMode>,
+
+    /// Where the embedding cache is stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_cache_storage: Option<StorageMode>,
+
+    /// Skip embedding-based retrieval entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_embedding_retrieval: Option<bool>,
+
+    /// Configuration applied to the session's default agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<DefaultAgentConfig>,
+
+    /// Additional plugin directories to load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_directories: Option<Vec<String>>,
+
+    /// Additional instruction directories to load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction_directories: Option<Vec<String>>,
+
+    /// Organization-level custom instructions injected into the system message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_custom_instructions: Option<String>,
+
+    /// Discover instructions on demand rather than eagerly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_on_demand_instruction_discovery: Option<bool>,
+
+    /// Allow file-triggered hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_file_hooks: Option<bool>,
+
+    /// Allow the runtime to run git operations on the host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_host_git_operations: Option<bool>,
+
+    /// Enable the persistent session store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_session_store: Option<bool>,
+
+    /// Enable skills discovery and execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_skills: Option<bool>,
+
+    // =========================================================================
+    // Auth and remote
+    // =========================================================================
+    /// GitHub token scoped to this session.
+    #[serde(rename = "gitHubToken", skip_serializing_if = "Option::is_none")]
+    pub github_token: Option<String>,
+
+    /// Remote session export and steering mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_session: Option<RemoteSessionMode>,
+
+    /// Cloud session options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<CloudSessionOptions>,
+
+    // =========================================================================
+    // Post-create session options (sent via `session.updateOptions`)
+    // =========================================================================
+    /// Skip loading the user's custom instructions.
+    #[serde(skip)]
+    pub skip_custom_instructions: Option<bool>,
+
+    /// Restrict custom agents to local definitions only.
+    #[serde(skip)]
+    pub custom_agents_local_only: Option<bool>,
+
+    /// Add Copilot as a git co-author on commits it makes.
+    #[serde(skip)]
+    pub coauthor_enabled: Option<bool>,
+
+    /// Allow the agent to manage scheduled prompts.
+    #[serde(skip)]
+    pub manage_schedule_enabled: Option<bool>,
 }
 
 /// Configuration for resuming an existing session.
@@ -942,13 +2005,203 @@ pub struct ResumeSessionConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_resume: bool,
 
+    /// Suppresses the `session.resumed` event emitted by the runtime.
+    ///
+    /// Defaults to `true` when resuming via
+    /// [`Client::join_session`](crate::client::Client::join_session).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppress_resume_event: Option<bool>,
+
+    /// System message configuration applied to the resumed session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<SystemMessageConfig>,
+
     /// Infinite session configuration for resumed sessions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub infinite_sessions: Option<InfiniteSessionConfig>,
 
+    /// Slash-command declarations advertised to the CLI (TUI completion).
+    /// Register the matching handlers via [`Session::register_command`](crate::Session::register_command).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<CommandDeclaration>>,
+
+    /// Canvas declarations provided by this session, sent on `session.resume`.
+    /// Register the dispatch handler via
+    /// [`Session::register_canvas_handler`](crate::Session::register_canvas_handler).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canvases: Option<Vec<crate::canvas::CanvasDeclaration>>,
+
     /// Session hooks for pre/post tool use, session lifecycle, etc.
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
+
+    // =========================================================================
+    // Tool filtering
+    // =========================================================================
+    /// Allowlist of tool names available to the resumed session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<String>>,
+
+    /// Denylist of tool names for the resumed session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_tools: Option<Vec<String>>,
+
+    // =========================================================================
+    // Model behavior
+    // =========================================================================
+    /// Reasoning summary verbosity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummary>,
+
+    /// Overrides for the runtime's view of the model's capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_capabilities: Option<ModelCapabilitiesOverride>,
+
+    /// Emit streaming events produced by sub-agents. Defaults to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_sub_agent_streaming_events: Option<bool>,
+
+    /// Redirect oversized tool output to files instead of the transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_output: Option<LargeToolOutputConfig>,
+
+    // =========================================================================
+    // Host capability requests
+    // =========================================================================
+    /// Request elicitation forwarding from the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_elicitation: Option<bool>,
+
+    /// Request exit-plan-mode forwarding from the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_exit_plan_mode: Option<bool>,
+
+    /// Request auto-mode-switch forwarding from the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_auto_mode_switch: Option<bool>,
+
+    /// Advertise this connection as a canvas renderer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_canvas_renderer: Option<bool>,
+
+    /// Request extension registration forwarding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_extensions: Option<bool>,
+
+    /// Enable MCP-app registration for this session.
+    #[serde(rename = "requestMcpApps", skip_serializing_if = "Option::is_none")]
+    pub enable_mcp_apps: Option<bool>,
+
+    /// Metadata describing the extension hosting this connection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_info: Option<ExtensionInfo>,
+
+    /// Canvas instances to restore in the host after resuming.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_canvases: Option<Vec<crate::canvas::OpenCanvasInstance>>,
+
+    // =========================================================================
+    // Discovery, storage, and instructions
+    // =========================================================================
+    /// Directory the runtime reads configuration from.
+    #[serde(rename = "configDir", skip_serializing_if = "Option::is_none")]
+    pub config_directory: Option<String>,
+
+    /// Discover configuration files from the working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_config_discovery: Option<bool>,
+
+    /// Skip embedding-retrieval initialization and execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_embedding_retrieval: Option<bool>,
+
+    /// Where the embedding cache is stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_cache_storage: Option<StorageMode>,
+
+    /// Where MCP OAuth tokens are stored.
+    #[serde(
+        rename = "mcpOAuthTokenStorage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mcp_oauth_token_storage: Option<StorageMode>,
+
+    /// Organization-level custom instructions injected into the system prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_custom_instructions: Option<String>,
+
+    /// Discover custom instructions on demand after successful file views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_on_demand_instruction_discovery: Option<bool>,
+
+    /// Additional directories scanned for plugins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_directories: Option<Vec<String>>,
+
+    /// Additional directories scanned for instruction files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction_directories: Option<Vec<String>>,
+
+    // =========================================================================
+    // Runtime feature flags
+    // =========================================================================
+    /// Emit per-session telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_session_telemetry: Option<bool>,
+
+    /// Load `.github/hooks/` filesystem hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_file_hooks: Option<bool>,
+
+    /// Allow the runtime to run git operations on the host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_host_git_operations: Option<bool>,
+
+    /// Allow cross-session store reads and writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_session_store: Option<bool>,
+
+    /// Enable skill directory scanning and loading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_skills: Option<bool>,
+
+    /// Configuration for the built-in default agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<DefaultAgentConfig>,
+
+    // =========================================================================
+    // Resume behavior, auth, and remote
+    // =========================================================================
+    /// Continue any work that was pending when the session was suspended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continue_pending_work: Option<bool>,
+
+    /// GitHub token scoped to this session.
+    #[serde(rename = "gitHubToken", skip_serializing_if = "Option::is_none")]
+    pub github_token: Option<String>,
+
+    /// Remote session export and steering mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_session: Option<RemoteSessionMode>,
+
+    // =========================================================================
+    // Post-resume session options (sent via `session.options.update`)
+    // =========================================================================
+    /// Skip loading the user's custom instructions.
+    #[serde(skip)]
+    pub skip_custom_instructions: Option<bool>,
+
+    /// Restrict custom agents to local definitions only.
+    #[serde(skip)]
+    pub custom_agents_local_only: Option<bool>,
+
+    /// Add Copilot as a git co-author on commits it makes.
+    #[serde(skip)]
+    pub coauthor_enabled: Option<bool>,
+
+    /// Allow the agent to manage scheduled prompts.
+    #[serde(skip)]
+    pub manage_schedule_enabled: Option<bool>,
 
     /// If true and provider not explicitly set, load from `COPILOT_SDK_BYOK_*` env vars.
     ///
@@ -991,6 +2244,34 @@ impl From<String> for MessageOptions {
 // =============================================================================
 // Client Options
 // =============================================================================
+
+/// Operating mode for a [`Client`](crate::client::Client).
+///
+/// Mirrors the Node.js `CopilotClientMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopilotClientMode {
+    /// Standard mode: the CLI owns the workspace and the local filesystem.
+    #[default]
+    #[serde(rename = "copilot-cli")]
+    CopilotCli,
+    /// Empty mode: the CLI starts with no implicit workspace. Requires either
+    /// [`ClientOptions::cwd`] or [`ClientOptions::session_fs`] to be set so the
+    /// runtime knows where the session is rooted.
+    Empty,
+}
+
+/// How a [`Client`](crate::client::Client) connects to the Copilot runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ConnectionKind {
+    /// Spawn (or attach to) a Copilot CLI server and talk to it as a child.
+    #[default]
+    Child,
+    /// Talk to the Copilot CLI over this process's own stdin/stdout, because
+    /// the SDK is running as a child process of the CLI. Used by
+    /// [`Client::join_session`](crate::client::Client::join_session).
+    ParentProcess,
+}
 
 /// Options for creating a CopilotClient.
 pub struct ClientOptions {
@@ -1052,6 +2333,44 @@ pub struct ClientOptions {
                 + Sync,
         >,
     >,
+
+    /// Operating mode.
+    ///
+    /// [`CopilotClientMode::Empty`] requires either [`ClientOptions::cwd`] or
+    /// [`ClientOptions::session_fs`] to be set.
+    pub mode: CopilotClientMode,
+
+    /// Enables the client-provided session filesystem.
+    ///
+    /// When set, the SDK sends `sessionFs.setProvider` after connecting and
+    /// every session must register a
+    /// [`SessionFsProvider`](crate::session_fs::SessionFsProvider) via
+    /// [`Session::register_session_fs_provider`](crate::session::Session::register_session_fs_provider).
+    pub session_fs: Option<crate::session_fs::SessionFsConfig>,
+
+    /// Callback returning the current W3C Trace Context.
+    ///
+    /// When set, `traceparent`/`tracestate` are injected into `session.create`
+    /// and `session.resume` requests for distributed trace propagation.
+    pub on_get_trace_context: Option<crate::trace::TraceContextProvider>,
+
+    /// How the client connects to the runtime.
+    ///
+    /// Set to [`ConnectionKind::ParentProcess`] by
+    /// [`Client::join_session`](crate::client::Client::join_session); you
+    /// normally do not set this yourself.
+    pub connection_kind: ConnectionKind,
+
+    /// Idle timeout, in seconds, after which the runtime shuts a session down.
+    ///
+    /// `0` (the default) disables the timeout.
+    pub session_idle_timeout_seconds: u64,
+
+    /// Start the runtime with remote-session support (`--remote`).
+    ///
+    /// Required for [`SessionConfig::remote_session`] and
+    /// [`SessionConfig::cloud`] to have any effect.
+    pub enable_remote_sessions: bool,
 }
 
 impl Default for ClientOptions {
@@ -1074,6 +2393,12 @@ impl Default for ClientOptions {
             allow_all_tools: false,
             telemetry: None,
             on_list_models: None,
+            mode: CopilotClientMode::default(),
+            session_fs: None,
+            on_get_trace_context: None,
+            connection_kind: ConnectionKind::default(),
+            session_idle_timeout_seconds: 0,
+            enable_remote_sessions: false,
         }
     }
 }
@@ -1101,6 +2426,18 @@ impl std::fmt::Debug for ClientOptions {
                 "on_list_models",
                 &self.on_list_models.as_ref().map(|_| "Fn(...)"),
             )
+            .field("mode", &self.mode)
+            .field("session_fs", &self.session_fs)
+            .field(
+                "on_get_trace_context",
+                &self.on_get_trace_context.as_ref().map(|_| "Fn(...)"),
+            )
+            .field("connection_kind", &self.connection_kind)
+            .field(
+                "session_idle_timeout_seconds",
+                &self.session_idle_timeout_seconds,
+            )
+            .field("enable_remote_sessions", &self.enable_remote_sessions)
             .finish()
     }
 }
@@ -1125,6 +2462,12 @@ impl Clone for ClientOptions {
             allow_all_tools: self.allow_all_tools,
             telemetry: self.telemetry.clone(),
             on_list_models: self.on_list_models.clone(),
+            mode: self.mode,
+            session_fs: self.session_fs.clone(),
+            on_get_trace_context: self.on_get_trace_context.clone(),
+            connection_kind: self.connection_kind,
+            session_idle_timeout_seconds: self.session_idle_timeout_seconds,
+            enable_remote_sessions: self.enable_remote_sessions,
         }
     }
 }
@@ -1415,6 +2758,12 @@ pub enum SessionMode {
 pub struct SetModelOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Reasoning summary mode for models that support configurable summaries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummary>,
+    /// Override the runtime's view of the model's capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_capabilities: Option<ModelCapabilitiesOverride>,
 }
 
 // =============================================================================
@@ -1445,6 +2794,29 @@ pub struct LogOptions {
 #[serde(rename_all = "camelCase")]
 pub struct LogResult {
     pub event_id: String,
+}
+
+/// Options for `session.lsp.initialize` — (re)loading the merged LSP configuration
+/// set for the session's working directory.
+///
+/// This drives the CLI-side LSP configuration loader (the `session.lsp.initialize`
+/// RPC). It is distinct from the crate's in-process [`crate::lsp::LspServer`], which is
+/// a standalone Rust-native LSP 3.17 server.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspInitializeOptions {
+    /// Force re-initialization even when LSP configs were already loaded for the
+    /// working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
+    /// Git root used as the boundary when traversing for project-level LSP configs
+    /// (supports monorepos).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_root: Option<String>,
+    /// Working directory used to load project-level LSP configs. Defaults to the
+    /// session working directory when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
 }
 
 // =============================================================================
@@ -2046,6 +3418,7 @@ mod tests {
     fn test_set_model_options_serialization() {
         let opts = SetModelOptions {
             reasoning_effort: Some("high".into()),
+            ..Default::default()
         };
         let value = serde_json::to_value(&opts).unwrap();
         assert_eq!(value["reasoningEffort"], "high");
@@ -2109,5 +3482,256 @@ mod tests {
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(value["clientName"], "my-cli");
         assert_eq!(value["agent"], "helper");
+    }
+
+    // =========================================================================
+    // Client mode / connection kind
+    // =========================================================================
+
+    #[test]
+    fn test_copilot_client_mode_wire_names() {
+        assert_eq!(
+            serde_json::to_value(CopilotClientMode::CopilotCli).unwrap(),
+            serde_json::json!("copilot-cli")
+        );
+        assert_eq!(
+            serde_json::to_value(CopilotClientMode::Empty).unwrap(),
+            serde_json::json!("empty")
+        );
+        assert_eq!(CopilotClientMode::default(), CopilotClientMode::CopilotCli);
+    }
+
+    #[test]
+    fn test_connection_kind_default_is_child() {
+        assert_eq!(ConnectionKind::default(), ConnectionKind::Child);
+    }
+
+    #[test]
+    fn test_client_options_defaults_for_new_fields() {
+        let options = ClientOptions::default();
+        assert_eq!(options.mode, CopilotClientMode::CopilotCli);
+        assert_eq!(options.connection_kind, ConnectionKind::Child);
+        assert!(options.session_fs.is_none());
+        assert!(options.on_get_trace_context.is_none());
+    }
+
+    // =========================================================================
+    // ResumeSessionConfig extensions
+    // =========================================================================
+
+    #[test]
+    fn test_resume_session_config_omits_unset_extensions() {
+        let value = serde_json::to_value(ResumeSessionConfig::default()).unwrap();
+        assert!(value.get("suppressResumeEvent").is_none());
+        assert!(value.get("systemMessage").is_none());
+    }
+
+    #[test]
+    fn test_resume_session_config_serializes_extensions() {
+        let config = ResumeSessionConfig {
+            suppress_resume_event: Some(true),
+            system_message: Some(SystemMessageConfig {
+                mode: Some(SystemMessageMode::Customize),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["suppressResumeEvent"], true);
+        assert_eq!(value["systemMessage"]["mode"], "customize");
+    }
+
+    // =========================================================================
+    // Section transform overrides
+    // =========================================================================
+
+    #[test]
+    fn test_section_override_action_transform_wire_name() {
+        assert_eq!(
+            serde_json::to_value(SectionOverrideAction::Transform).unwrap(),
+            serde_json::json!("transform")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_section_override_transform_fn_is_callable() {
+        let over =
+            SectionOverride::transform(|content| Box::pin(async move { content.to_uppercase() }));
+        let f = over.transform_fn().expect("transform fn");
+        assert_eq!(f("abc".to_string()).await, "ABC");
+    }
+
+    #[test]
+    fn test_section_override_debug_hides_callback() {
+        let over = SectionOverride::transform(|content| Box::pin(async move { content }));
+        let debug = format!("{over:?}");
+        assert!(debug.contains("Transform"));
+    }
+    // ---- Wave 3: session config feature flags / capability overrides ----
+
+    #[test]
+    fn test_reasoning_summary_wire_names() {
+        for (v, w) in [
+            (ReasoningSummary::None, "none"),
+            (ReasoningSummary::Concise, "concise"),
+            (ReasoningSummary::Detailed, "detailed"),
+        ] {
+            assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(w));
+        }
+    }
+
+    #[test]
+    fn test_remote_session_mode_wire_names() {
+        for (v, w) in [
+            (RemoteSessionMode::Off, "off"),
+            (RemoteSessionMode::Export, "export"),
+            (RemoteSessionMode::On, "on"),
+        ] {
+            assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(w));
+        }
+    }
+
+    #[test]
+    fn test_storage_mode_wire_names() {
+        assert_eq!(
+            serde_json::to_value(StorageMode::Persistent).unwrap(),
+            serde_json::json!("persistent")
+        );
+        assert_eq!(
+            serde_json::to_value(StorageMode::InMemory).unwrap(),
+            serde_json::json!("in-memory")
+        );
+    }
+
+    #[test]
+    fn test_model_capabilities_override_limits_use_snake_case() {
+        let caps = ModelCapabilitiesOverride {
+            limits: Some(ModelCapabilitiesOverrideLimits {
+                max_prompt_tokens: Some(1000),
+                max_output_tokens: Some(200),
+                max_context_window_tokens: Some(1200),
+                vision: Some(ModelCapabilitiesOverrideLimitsVision {
+                    supported_media_types: Some(vec!["image/png".into()]),
+                    max_prompt_images: Some(3),
+                    max_prompt_image_size: Some(4096),
+                }),
+            }),
+            supports: Some(ModelCapabilitiesOverrideSupports {
+                vision: Some(true),
+                reasoning_effort: Some(true),
+            }),
+        };
+        let v = serde_json::to_value(&caps).unwrap();
+        assert_eq!(v["limits"]["max_prompt_tokens"], 1000);
+        assert_eq!(v["limits"]["max_output_tokens"], 200);
+        assert_eq!(v["limits"]["max_context_window_tokens"], 1200);
+        assert_eq!(
+            v["limits"]["vision"]["supported_media_types"][0],
+            "image/png"
+        );
+        assert_eq!(v["limits"]["vision"]["max_prompt_images"], 3);
+        assert_eq!(v["limits"]["vision"]["max_prompt_image_size"], 4096);
+        // supports uses camelCase, unlike limits
+        assert_eq!(v["supports"]["reasoningEffort"], true);
+        assert_eq!(v["supports"]["vision"], true);
+    }
+
+    #[test]
+    fn test_large_tool_output_config_uses_output_dir() {
+        let cfg = LargeToolOutputConfig {
+            output_directory: Some("/tmp/out".into()),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["outputDir"], "/tmp/out");
+        assert!(v.get("outputDirectory").is_none());
+    }
+
+    #[test]
+    fn test_session_config_wave3_wire_names() {
+        let cfg = SessionConfig {
+            github_token: Some("tok".into()),
+            enable_mcp_apps: Some(true),
+            reasoning_summary: Some(ReasoningSummary::Concise),
+            default_agent: Some(DefaultAgentConfig {
+                excluded_tools: Some(vec!["shell".into()]),
+            }),
+            remote_session: Some(RemoteSessionMode::Export),
+            mcp_oauth_token_storage: Some(StorageMode::InMemory),
+            embedding_cache_storage: Some(StorageMode::Persistent),
+            cloud: Some(CloudSessionOptions {
+                repository: Some(CloudSessionRepository {
+                    owner: "octo".into(),
+                    name: "repo".into(),
+                    branch: None,
+                }),
+            }),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["gitHubToken"], "tok");
+        assert_eq!(v["requestMcpApps"], true);
+        assert_eq!(v["reasoningSummary"], "concise");
+        assert_eq!(v["defaultAgent"]["excludedTools"][0], "shell");
+        assert_eq!(v["remoteSession"], "export");
+        assert_eq!(v["mcpOAuthTokenStorage"], "in-memory");
+        assert_eq!(v["embeddingCacheStorage"], "persistent");
+        assert_eq!(v["cloud"]["repository"]["owner"], "octo");
+    }
+
+    #[test]
+    fn test_session_update_options_is_empty() {
+        assert!(SessionUpdateOptions::default().is_empty());
+        let patch = SessionUpdateOptions {
+            coauthor_enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(!patch.is_empty());
+        let v = serde_json::to_value(&patch).unwrap();
+        assert_eq!(v.as_object().unwrap().len(), 1);
+        assert_eq!(v["coauthorEnabled"], false);
+    }
+
+    #[test]
+    fn test_session_update_options_wire_names() {
+        let patch = SessionUpdateOptions {
+            skip_custom_instructions: Some(true),
+            custom_agents_local_only: Some(true),
+            manage_schedule_enabled: Some(false),
+            installed_plugins: Some(Vec::new()),
+            enable_skills: Some(false),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&patch).unwrap();
+        assert_eq!(v["skipCustomInstructions"], true);
+        assert_eq!(v["customAgentsLocalOnly"], true);
+        assert_eq!(v["manageScheduleEnabled"], false);
+        assert_eq!(v["installedPlugins"], serde_json::json!([]));
+        assert_eq!(v["enableSkills"], false);
+    }
+
+    #[test]
+    fn test_set_model_options_serializes_overrides() {
+        let opts = SetModelOptions {
+            reasoning_effort: Some("high".into()),
+            reasoning_summary: Some(ReasoningSummary::Detailed),
+            model_capabilities: Some(ModelCapabilitiesOverride {
+                supports: Some(ModelCapabilitiesOverrideSupports {
+                    vision: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        };
+        let v = serde_json::to_value(&opts).unwrap();
+        assert_eq!(v["reasoningEffort"], "high");
+        assert_eq!(v["reasoningSummary"], "detailed");
+        assert_eq!(v["modelCapabilities"]["supports"]["vision"], false);
+    }
+
+    #[test]
+    fn test_set_model_options_default_is_empty_object() {
+        let v = serde_json::to_value(SetModelOptions::default()).unwrap();
+        assert_eq!(v, serde_json::json!({}));
     }
 }

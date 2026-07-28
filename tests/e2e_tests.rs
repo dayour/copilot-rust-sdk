@@ -898,6 +898,7 @@ async fn test_system_message_append_mode() {
         system_message: Some(SystemMessageConfig {
             mode: Some(SystemMessageMode::Append),
             content: Some("Always end your responses with 'MARKER_12345'.".to_string()),
+            sections: None,
         }),
         ..Default::default()
     };
@@ -932,6 +933,7 @@ async fn test_system_message_replace_mode() {
         system_message: Some(SystemMessageConfig {
             mode: Some(SystemMessageMode::Replace),
             content: Some("You are a calculator. Only respond with numbers, no words.".to_string()),
+            sections: None,
         }),
         ..Default::default()
     };
@@ -1476,6 +1478,7 @@ async fn test_full_workflow() {
         system_message: Some(SystemMessageConfig {
             mode: Some(SystemMessageMode::Append),
             content: Some("Be concise.".to_string()),
+            sections: None,
         }),
         ..Default::default()
     };
@@ -2680,6 +2683,7 @@ async fn test_set_model_with_reasoning_effort() {
             "gpt-4.1",
             Some(SetModelOptions {
                 reasoning_effort: Some("high".into()),
+                ..Default::default()
             }),
         )
         .await;

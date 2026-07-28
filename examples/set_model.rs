@@ -28,6 +28,7 @@ async fn main() -> copilot_sdk::Result<()> {
             "claude-sonnet-4",
             Some(SetModelOptions {
                 reasoning_effort: Some("high".into()),
+                ..Default::default()
             }),
         )
         .await?;
