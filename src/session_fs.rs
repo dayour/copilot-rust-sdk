@@ -292,6 +292,9 @@ pub struct SessionFsSqliteQueryResult {
     /// Rowid of the last inserted row, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_insert_rowid: Option<i64>,
+    /// Error describing why the statement failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<SessionFsError>,
 }
 
 /// Bind parameters for a SQLite statement.

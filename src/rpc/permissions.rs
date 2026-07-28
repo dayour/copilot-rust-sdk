@@ -132,6 +132,10 @@ pub struct PermissionsConfigureAdditionalContentExclusionPolicy {
     /// Rules that define which paths are excluded.
     pub rules: Vec<PermissionsConfigureAdditionalContentExclusionPolicyRule>,
     /// Opaque last-updated marker supplied by the host.
+    ///
+    /// The schema spells this key in snake_case, so it must opt out of the
+    /// struct-level `rename_all = "camelCase"`.
+    #[serde(rename = "last_updated_at")]
     pub last_updated_at: Value,
     /// Scope to which this exclusion policy applies.
     pub scope: PermissionsConfigureAdditionalContentExclusionPolicyScope,

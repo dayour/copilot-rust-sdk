@@ -16,7 +16,7 @@ Once published, add:
 
 ```toml
 [dependencies]
-copilot-sdk = "0.1"
+copilot-sdk = "3.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -319,33 +319,90 @@ Set `COPILOT_SDK_RUST_SNAPSHOT_DIR` or `UPSTREAM_SNAPSHOTS` to point at `copilot
 
 ## Feature Parity
 
-This port targets feature parity with the official SDKs (Go, TypeScript, Python, .NET):
+Parity is **measured, not asserted**. The authoritative contract is
+`schemas/api.schema.json`, vendored verbatim from the `@github/copilot` npm
+package (protocol v3). It declares 196 JSON-RPC methods. `codegen/` turns that
+schema into `src/generated/methods.rs`, and `tests/rpc_parity.rs` fails the
+build if the crate drifts from it.
 
-| Feature | Status |
-|---------|--------|
-| Session CRUD (create/resume/list/delete) | ✅ |
-| Model management (get/switch) | ✅ |
-| Mode management (interactive/plan/autopilot) | ✅ |
-| Plan management (read/update/delete) | ✅ |
-| Agent management (list/select/deselect) | ✅ |
-| Tool system (register/invoke/permissions) | ✅ |
-| Hook system (6 lifecycle hooks) | ✅ |
-| Permission handling | ✅ |
-| User input handling | ✅ |
-| Infinite sessions & compaction | ✅ |
-| Shell operations (exec/kill) | ✅ |
-| Workspace file operations | ✅ |
-| Fleet management | ✅ |
-| Rust-native LSP 3.17 server and semantic symbol IDs | ✅ |
-| Session logging | ✅ |
-| BYOK (custom providers) | ✅ |
-| OpenTelemetry configuration | ✅ |
-| Custom model list callback | ✅ |
-| MCP server integration | ✅ |
-| Custom agent configuration | ✅ |
-| Streaming events (40+ types) | ✅ |
-| Protocol v2/v3 negotiation | ✅ |
-| CLI bundling | ❌ (planned) |
+### RPC method coverage
+
+| Surface | Description | Covered |
+|---------|-------------|---------|
+| `server` | Client-to-server, not session-scoped | 38 / 38 |
+| `session` | Client-to-server, scoped to one session | 143 / 143 |
+| `clientSession` | Reverse RPC the SDK must serve | 15 / 15 |
+| **Total** | | **196 / 196 (100%)** |
+
+A method counts as covered only if the crate actually invokes it (outbound) or
+serves it (inbound match arm). Declaring a type is not sufficient.
+
+### Coverage by namespace
+
+| Namespace | Methods | Namespace | Methods |
+|-----------|--------:|-----------|--------:|
+| `session.permissions` | 21 | `session.canvas` | 5 |
+| `sessions` | 19 | `session.history` | 5 |
+| `session.mcp` | 15 | `session.eventLog` | 4 |
+| `sessionFs` | 13 | `session.extensions` | 4 |
+| `session.tasks` | 11 | `session.model` | 4 |
+| `mcp` | 8 | `canvas` | 3 |
+| `session.ui` | 8 | `session.name` | 3 |
+| `session.workspaces` | 8 | `session.plan` | 3 |
+| `session.commands` | 6 | `session.queue` | 3 |
+| `session.metadata` | 6 | `session.remote` | 3 |
+| `session.skills` | 6 | `session.tools` | 3 |
+| `session.agent` | 5 | others (auth, mode, schedule, shell, skills, account, agentRegistry, connect, models, ping, secrets, fleet, instructions, lsp, options, plugins, telemetry, usage, tools, user) | 23 |
+
+### How this is enforced
+
+`tests/rpc_parity.rs` runs six gates, and CI runs them on every push:
+
+- `schema_registry_is_well_formed` - the generated registry matches the schema.
+- `session_surface_names_are_prefixed` - naming invariants hold.
+- `every_invoked_method_exists_in_schema` - **catches typo'd wire names**; this
+  gate found and fixed 8 live protocol defects (for example
+  `model.get_current` should be `model.getCurrent`, and
+  `account.get_quota` should be `account.getQuota`).
+- `off_schema_exceptions_are_still_needed` - the 11 documented methods the CLI
+  accepts but does not declare cannot silently grow.
+- `unbound_methods_match_allowlist` - a ratchet. `tests/rpc_parity_allowlist.txt`
+  is now empty, so any newly unbound method fails CI.
+- `report_parity_coverage` - prints the table above.
+
+CI additionally runs a codegen drift check: it regenerates
+`src/generated/methods.rs` from the schema and fails if the committed file
+differs.
+
+### Capability parity
+
+| Capability | Status |
+|------------|--------|
+| Session CRUD (create/resume/list/delete) | yes |
+| Model management (get/switch) | yes |
+| Mode management (interactive/plan/autopilot) | yes |
+| Plan management (read/update/delete) | yes |
+| Agent management (list/select/deselect) | yes |
+| Tool system (register/invoke/permissions) | yes |
+| Hook system (6 lifecycle hooks) | yes |
+| Permission handling | yes |
+| User input handling | yes |
+| Infinite sessions and compaction | yes |
+| Shell operations (exec/kill) | yes |
+| Workspace file operations | yes |
+| Session filesystem provider | yes |
+| Canvas subsystem | yes |
+| MCP server integration | yes |
+| Fleet management | yes |
+| Rust-native LSP 3.17 server and semantic symbol IDs | yes |
+| Session logging | yes |
+| BYOK (custom providers) | yes |
+| OpenTelemetry configuration | yes |
+| Custom model list callback | yes |
+| Custom agent configuration | yes |
+| Streaming events (40+ types) | yes |
+| Protocol v2/v3 negotiation | yes |
+
 
 ## License
 

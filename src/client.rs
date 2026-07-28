@@ -8,7 +8,7 @@
 use crate::error::{CopilotError, Result};
 use crate::events::SessionEvent;
 use crate::jsonrpc::{JsonRpcClient, StdioJsonRpcClient, TcpJsonRpcClient};
-use crate::process::{CopilotProcess, ProcessOptions};
+use crate::process::{CopilotProcess, ProcessOptions, ResolvedCopilotCli};
 use crate::session::Session;
 use crate::transport::ParentStdioTransport;
 use crate::types::{
@@ -35,7 +35,7 @@ use tokio::sync::{Mutex, RwLock};
 ///
 /// On Windows, .cmd/.bat files are npm wrappers that need special handling.
 /// We resolve them to their underlying node.js scripts for proper pipe handling.
-fn resolve_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String>) {
+fn resolve_native_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String>) {
     let path = cli_path.to_path_buf();
     let args_owned = args.to_vec();
 
@@ -120,6 +120,20 @@ fn resolve_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String
     }
 
     (path, args_owned)
+}
+
+fn resolve_cli_command(cli: &ResolvedCopilotCli, args: &[String]) -> (PathBuf, Vec<String>) {
+    match cli {
+        ResolvedCopilotCli::NativeExecutable(path) => resolve_native_cli_command(path, args),
+        ResolvedCopilotCli::NodeScript {
+            node_executable,
+            script_path,
+        } => {
+            let mut full_args = vec![script_path.to_string_lossy().to_string()];
+            full_args.extend(args.iter().cloned());
+            (node_executable.clone(), full_args)
+        }
+    }
 }
 
 fn spawn_cli_stderr_logger(stderr: tokio::process::ChildStderr) {
@@ -1757,14 +1771,15 @@ impl Client {
             return Ok(());
         }
 
-        let cli_path = self
-            .options
-            .cli_path
-            .clone()
-            .or_else(crate::process::find_copilot_cli)
-            .ok_or_else(|| {
-                CopilotError::InvalidConfig("Could not find Copilot CLI executable".into())
-            })?;
+        let cli = if let Some(cli_path) = self.options.cli_path.clone() {
+            ResolvedCopilotCli::NativeExecutable(cli_path)
+        } else {
+            let discovery = crate::process::discover_copilot_cli();
+            discovery
+                .clone()
+                .into_resolved_cli()
+                .ok_or_else(|| CopilotError::InvalidConfig(discovery.not_found_message()))?
+        };
 
         let log_level = self.options.log_level.to_string();
 
@@ -1824,7 +1839,7 @@ impl Client {
 
         // Resolve command and arguments based on platform
         // On Windows, use cmd /c for PATH resolution if path is not absolute (for .cmd files)
-        let (executable, full_args) = resolve_cli_command(&cli_path, &args);
+        let (executable, full_args) = resolve_cli_command(&cli, &args);
 
         // Build process options
         let mut proc_options = ProcessOptions::new()

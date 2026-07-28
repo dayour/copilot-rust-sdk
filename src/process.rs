@@ -7,7 +7,7 @@
 
 use crate::error::{CopilotError, Result};
 use crate::transport::StdioTransport;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
@@ -272,41 +272,221 @@ pub fn is_node_script(path: &Path) -> bool {
 
 /// Get the system's Node.js executable path.
 pub fn find_node() -> Option<PathBuf> {
+    if let Ok(node_path) = std::env::var("NODE") {
+        let node_path = node_path.trim();
+        if !node_path.is_empty() {
+            return Some(PathBuf::from(node_path));
+        }
+    }
+
     find_executable("node")
 }
 
-/// Find the Copilot CLI executable.
+/// A fully resolved Copilot CLI launch target.
 ///
-/// Searches for the Copilot CLI in common locations and the system PATH.
-pub fn find_copilot_cli() -> Option<PathBuf> {
-    // First, allow an explicit override to match the upstream SDKs.
-    if let Ok(cli_path) = std::env::var("COPILOT_CLI_PATH") {
-        let cli_path = cli_path.trim();
-        if !cli_path.is_empty() {
-            let path = PathBuf::from(cli_path);
-            if path.exists() {
-                return Some(path);
+/// This can either be a native executable that should be spawned directly, or
+/// the bundled `@github/copilot/index.js` entrypoint that must be launched via
+/// a Node.js interpreter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedCopilotCli {
+    /// A native executable that can be spawned directly.
+    NativeExecutable(PathBuf),
+
+    /// A bundled JavaScript entrypoint that must be launched as
+    /// `node <script>`.
+    NodeScript {
+        /// The Node.js interpreter to execute.
+        node_executable: PathBuf,
+
+        /// The bundled `@github/copilot/index.js` script.
+        script_path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CopilotCliDiscovery {
+    resolved_cli: Option<ResolvedCopilotCli>,
+    searched_locations: Vec<String>,
+}
+
+impl CopilotCliDiscovery {
+    pub(crate) fn into_resolved_cli(self) -> Option<ResolvedCopilotCli> {
+        self.resolved_cli
+    }
+
+    pub(crate) fn not_found_message(&self) -> String {
+        format!(
+            "Could not find Copilot CLI executable. Searched {}",
+            self.searched_locations.join(", ")
+        )
+    }
+}
+
+fn dedup_ancestor_directories(start_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut directories = Vec::new();
+
+    for start_dir in start_dirs {
+        for ancestor in start_dir.ancestors() {
+            let ancestor = ancestor.to_path_buf();
+            if seen.insert(ancestor.clone()) {
+                directories.push(ancestor);
             }
         }
     }
 
-    // First, try the system PATH
-    if let Some(path) = find_executable("copilot") {
-        return Some(path);
+    directories
+}
+
+fn bundled_cli_candidates(start_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    dedup_ancestor_directories(start_dirs)
+        .into_iter()
+        .map(|dir| {
+            dir.join("node_modules")
+                .join("@github")
+                .join("copilot")
+                .join("index.js")
+        })
+        .collect()
+}
+
+fn find_bundled_copilot_cli(
+    start_dirs: &[PathBuf],
+    node_executable: Option<PathBuf>,
+) -> Option<ResolvedCopilotCli> {
+    let node_executable = node_executable?;
+
+    bundled_cli_candidates(start_dirs)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .map(|script_path| ResolvedCopilotCli::NodeScript {
+            node_executable,
+            script_path,
+        })
+}
+
+fn discover_copilot_cli_with<F>(
+    cli_override: Option<&Path>,
+    cwd_start: Option<&Path>,
+    exe_start: Option<&Path>,
+    find_in_path: F,
+    node_executable: Option<PathBuf>,
+) -> CopilotCliDiscovery
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    let mut searched_locations = Vec::new();
+
+    if let Some(cli_path) = cli_override {
+        searched_locations.push(format!("COPILOT_CLI_PATH={}", cli_path.display()));
+        if cli_path.exists() {
+            return CopilotCliDiscovery {
+                resolved_cli: Some(ResolvedCopilotCli::NativeExecutable(cli_path.to_path_buf())),
+                searched_locations,
+            };
+        }
+    } else {
+        searched_locations.push("COPILOT_CLI_PATH".to_string());
     }
 
-    // On Windows, also try "copilot.cmd" and "copilot.exe"
+    searched_locations.push("PATH entry \"copilot\"".to_string());
+    if let Some(path) = find_in_path("copilot") {
+        return CopilotCliDiscovery {
+            resolved_cli: Some(ResolvedCopilotCli::NativeExecutable(path)),
+            searched_locations,
+        };
+    }
+
     #[cfg(windows)]
     {
-        if let Some(path) = find_executable("copilot.cmd") {
-            return Some(path);
+        searched_locations.push("PATH entry \"copilot.cmd\"".to_string());
+        if let Some(path) = find_in_path("copilot.cmd") {
+            return CopilotCliDiscovery {
+                resolved_cli: Some(ResolvedCopilotCli::NativeExecutable(path)),
+                searched_locations,
+            };
         }
-        if let Some(path) = find_executable("copilot.exe") {
-            return Some(path);
+
+        searched_locations.push("PATH entry \"copilot.exe\"".to_string());
+        if let Some(path) = find_in_path("copilot.exe") {
+            return CopilotCliDiscovery {
+                resolved_cli: Some(ResolvedCopilotCli::NativeExecutable(path)),
+                searched_locations,
+            };
         }
     }
 
-    None
+    let mut bundle_start_dirs = Vec::new();
+    match cwd_start {
+        Some(dir) => bundle_start_dirs.push(dir.to_path_buf()),
+        None => searched_locations.push(
+            "bundled @github/copilot/index.js via current working directory ancestors (unavailable)"
+                .to_string(),
+        ),
+    }
+    match exe_start {
+        Some(dir) => bundle_start_dirs.push(dir.to_path_buf()),
+        None => searched_locations.push(
+            "bundled @github/copilot/index.js via current executable ancestors (unavailable)"
+                .to_string(),
+        ),
+    }
+
+    let bundled_candidates = bundled_cli_candidates(&bundle_start_dirs);
+    searched_locations.extend(bundled_candidates.iter().map(|candidate| {
+        format!(
+            "bundled @github/copilot/index.js at {}",
+            candidate.display()
+        )
+    }));
+
+    let resolved_cli = find_bundled_copilot_cli(&bundle_start_dirs, node_executable);
+
+    CopilotCliDiscovery {
+        resolved_cli,
+        searched_locations,
+    }
+}
+
+/// Discover how to launch the Copilot CLI.
+///
+/// Discovery precedence is:
+/// 1. `COPILOT_CLI_PATH`
+/// 2. `copilot` on `PATH` (plus `copilot.cmd` / `copilot.exe` on Windows)
+/// 3. Bundled `node_modules/@github/copilot/index.js` by walking up from the
+///    current working directory and current executable directory
+pub(crate) fn discover_copilot_cli() -> CopilotCliDiscovery {
+    let cli_override = std::env::var("COPILOT_CLI_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let cwd_start = std::env::current_dir().ok();
+    let exe_start = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+
+    discover_copilot_cli_with(
+        cli_override.as_deref(),
+        cwd_start.as_deref(),
+        exe_start.as_deref(),
+        find_executable,
+        find_node(),
+    )
+}
+
+/// Find the Copilot CLI entrypoint path.
+///
+/// Returns the native executable path when one is discovered directly. For the
+/// bundled npm package fallback, returns the `@github/copilot/index.js`
+/// script path.
+pub fn find_copilot_cli() -> Option<PathBuf> {
+    discover_copilot_cli()
+        .into_resolved_cli()
+        .map(|resolved| match resolved {
+            ResolvedCopilotCli::NativeExecutable(path) => path,
+            ResolvedCopilotCli::NodeScript { script_path, .. } => script_path,
+        })
 }
 
 #[cfg(test)]
@@ -361,9 +541,93 @@ mod tests {
     }
 
     #[test]
-    fn test_find_copilot_cli() {
-        // This test just verifies the function doesn't panic
-        // Whether it finds copilot depends on the system
-        let _ = find_copilot_cli();
+    fn test_bundled_cli_walk_up_finds_index_js() {
+        let fixture = unique_temp_path("bundled-found");
+        let deep_dir = fixture.join("workspace").join("project").join("nested");
+        let bundled_index = fixture
+            .join("workspace")
+            .join("node_modules")
+            .join("@github")
+            .join("copilot")
+            .join("index.js");
+
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        std::fs::create_dir_all(bundled_index.parent().unwrap()).unwrap();
+        std::fs::write(&bundled_index, "// bundled copilot").unwrap();
+
+        let resolved = find_bundled_copilot_cli(&[deep_dir], Some(PathBuf::from("node")));
+
+        assert_eq!(
+            resolved,
+            Some(ResolvedCopilotCli::NodeScript {
+                node_executable: PathBuf::from("node"),
+                script_path: bundled_index.clone(),
+            })
+        );
+
+        std::fs::remove_dir_all(&fixture).unwrap();
+    }
+
+    #[test]
+    fn test_bundled_cli_walk_up_returns_none_when_absent() {
+        let fixture = unique_temp_path("bundled-missing");
+        let deep_dir = fixture.join("workspace").join("project").join("nested");
+
+        std::fs::create_dir_all(&deep_dir).unwrap();
+
+        let resolved = find_bundled_copilot_cli(&[deep_dir], Some(PathBuf::from("node")));
+
+        assert_eq!(resolved, None);
+
+        std::fs::remove_dir_all(&fixture).unwrap();
+    }
+
+    #[test]
+    fn test_copilot_cli_path_takes_precedence_over_bundled_cli() {
+        let fixture = unique_temp_path("bundled-precedence");
+        let override_path = fixture.join("custom").join("copilot");
+        let cwd_start = fixture.join("workspace").join("project").join("nested");
+        let exe_start = fixture.join("tooling").join("bin");
+        let bundled_index = fixture
+            .join("workspace")
+            .join("node_modules")
+            .join("@github")
+            .join("copilot")
+            .join("index.js");
+
+        std::fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&cwd_start).unwrap();
+        std::fs::create_dir_all(&exe_start).unwrap();
+        std::fs::create_dir_all(bundled_index.parent().unwrap()).unwrap();
+        std::fs::write(&override_path, "").unwrap();
+        std::fs::write(&bundled_index, "// bundled copilot").unwrap();
+
+        let discovery = discover_copilot_cli_with(
+            Some(&override_path),
+            Some(&cwd_start),
+            Some(&exe_start),
+            |_| None,
+            Some(PathBuf::from("node")),
+        );
+
+        assert_eq!(
+            discovery.into_resolved_cli(),
+            Some(ResolvedCopilotCli::NativeExecutable(override_path.clone()))
+        );
+
+        std::fs::remove_dir_all(&fixture).unwrap();
+    }
+
+    fn unique_temp_path(label: &str) -> PathBuf {
+        let unique = format!(
+            "copilot-sdk-rust-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        std::env::temp_dir().join(unique)
     }
 }

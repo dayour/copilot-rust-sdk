@@ -86,6 +86,7 @@ pub use types::{
     system_message_sections,
     // Config types
     AgentInfo,
+    AgentInfoSource,
     // Enums
     AttachmentType,
     AutoModeSwitchRequest,
@@ -129,6 +130,8 @@ pub use types::{
     McpServerConfig,
     MessageOptions,
     ModelBilling,
+    ModelBillingTokenPrices,
+    ModelBillingTokenPricesLongContext,
     ModelCapabilities,
     // Model capability override types
     ModelCapabilitiesOverride,
@@ -167,6 +170,7 @@ pub use types::{
     SelectionRange,
     SessionCapabilities,
     SessionConfig,
+    SessionContext,
     SessionEndHandler,
     SessionEndHookInput,
     SessionEndHookOutput,

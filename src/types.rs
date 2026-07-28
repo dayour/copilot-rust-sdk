@@ -56,6 +56,8 @@ pub enum AttachmentType {
     File,
     Directory,
     Selection,
+    Blob,
+    GithubReference,
 }
 
 /// Log level for the CLI.
@@ -97,6 +99,134 @@ pub struct ToolBinaryResult {
     pub result_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+/// Icon theme variant for an external resource link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExternalToolTextResultForLlmContentResourceLinkIconTheme {
+    /// Icon intended for light themes.
+    Light,
+    /// Icon intended for dark themes.
+    Dark,
+}
+
+/// Icon image metadata for an external resource link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolTextResultForLlmContentResourceLinkIcon {
+    /// URL or path to the icon image.
+    pub src: String,
+    /// MIME type of the icon image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Available icon sizes (for example `16x16` or `32x32`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<Vec<String>>,
+    /// Theme variant this icon is intended for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ExternalToolTextResultForLlmContentResourceLinkIconTheme>,
+}
+
+/// Embedded text resource contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedTextResourceContents {
+    /// URI identifying the resource.
+    pub uri: String,
+    /// MIME type of the text content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Text content of the resource.
+    pub text: String,
+}
+
+/// Embedded binary resource contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBlobResourceContents {
+    /// URI identifying the resource.
+    pub uri: String,
+    /// MIME type of the blob content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Base64-encoded binary content of the resource.
+    pub blob: String,
+}
+
+/// Embedded resource contents, either inline text or inline binary data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExternalToolTextResultForLlmContentResourceDetails {
+    /// Embedded text resource contents.
+    Text(EmbeddedTextResourceContents),
+    /// Embedded binary resource contents.
+    Blob(EmbeddedBlobResourceContents),
+}
+
+/// A tool-result content block for LLM-visible output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExternalToolTextResultForLlmContent {
+    /// Plain text content block.
+    Text {
+        /// The text content.
+        text: String,
+    },
+    /// Terminal or shell output content block.
+    Terminal {
+        /// Terminal or shell output text.
+        text: String,
+        /// Process exit code, if the command has completed.
+        #[serde(rename = "exitCode", skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i64>,
+        /// Working directory where the command was executed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    /// Base64-encoded image content block.
+    Image {
+        /// Base64-encoded image data.
+        data: String,
+        /// MIME type of the image.
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Base64-encoded audio content block.
+    Audio {
+        /// Base64-encoded audio data.
+        data: String,
+        /// MIME type of the audio.
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// External resource-link content block.
+    ResourceLink {
+        /// Icons associated with this resource.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icons: Option<Vec<ExternalToolTextResultForLlmContentResourceLinkIcon>>,
+        /// Resource name identifier.
+        name: String,
+        /// Human-readable display title for the resource.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// URI identifying the resource.
+        uri: String,
+        /// Human-readable description of the resource.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// MIME type of the resource content.
+        #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        /// Size of the resource in bytes.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+    },
+    /// Embedded resource content block.
+    Resource {
+        /// The embedded resource contents.
+        resource: ExternalToolTextResultForLlmContentResourceDetails,
+    },
 }
 
 /// Result object returned from tool execution.
@@ -716,17 +846,34 @@ pub struct CloudSessionOptions {
 }
 
 /// A plugin installed into a session.
+///
+/// Mirrors the `SessionInstalledPlugin` schema definition, which declares
+/// `additionalProperties: false`. The schema spells `installed_at` and
+/// `cache_path` in snake_case, so this struct deliberately does **not** use
+/// `rename_all = "camelCase"` -- the Rust field names are already the exact
+/// wire names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SessionInstalledPlugin {
-    /// Plugin identifier.
-    pub id: String,
-    /// Absolute path to the plugin root.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    /// Whether the plugin is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    /// Plugin name.
+    pub name: String,
+    /// Marketplace the plugin came from (empty string for direct repo installs).
+    pub marketplace: String,
+    /// Installation timestamp (ISO-8601).
+    pub installed_at: String,
+    /// Whether the plugin is currently enabled.
+    pub enabled: bool,
+    /// Installed version, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Path where the plugin is cached locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
+    /// Source descriptor for direct repo installs (when `marketplace` is empty).
+    ///
+    /// The schema marks this `x-opaque-json`: it is a union of an
+    /// `owner/repo` string and three object forms, so it is carried verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<serde_json::Value>,
 }
 
 /// Patch applied to a live session via `session.options.update`.
@@ -979,6 +1126,232 @@ impl ProviderConfig {
     }
 }
 
+/// Endpoint URLs returned in a Copilot user snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopilotUserResponseEndpoints {
+    /// API endpoint URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    /// Origin-tracker endpoint URL.
+    #[serde(rename = "origin-tracker", skip_serializing_if = "Option::is_none")]
+    pub origin_tracker: Option<String>,
+    /// Proxy endpoint URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    /// Telemetry endpoint URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<String>,
+}
+
+/// Organization entry embedded in a Copilot user snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopilotOrganization {
+    /// Organization login, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    /// Organization display name, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Quota snapshot entry embedded in a Copilot user snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopilotUserQuotaSnapshot {
+    /// Total entitlement for this quota bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entitlement: Option<f64>,
+    /// Number of overage events already consumed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overage_count: Option<f64>,
+    /// Whether overage usage is permitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overage_permitted: Option<bool>,
+    /// Percentage of quota remaining.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent_remaining: Option<f64>,
+    /// Quota identifier string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_id: Option<String>,
+    /// Remaining quota units for the quota bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_remaining: Option<f64>,
+    /// Remaining quota units, when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<f64>,
+    /// Whether the quota is unlimited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlimited: Option<bool>,
+    /// Timestamp of the snapshot in UTC.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp_utc: Option<String>,
+    /// Whether this quota bucket actually has a quota.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_quota: Option<bool>,
+    /// Quota reset instant expressed as a numeric timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_reset_at: Option<f64>,
+    /// Whether token-based billing applies to this quota bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_based_billing: Option<bool>,
+}
+
+/// Snapshot of the authenticated user's Copilot subscription information.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopilotUserResponse {
+    /// Authenticated login name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    /// Copilot access SKU identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_type_sku: Option<String>,
+    /// Analytics tracking identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analytics_tracking_id: Option<String>,
+    /// Assigned date, when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_date: Option<String>,
+    /// Whether the user can sign up for the limited plan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_signup_for_limited: Option<bool>,
+    /// Whether chat is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_enabled: Option<bool>,
+    /// Copilot plan tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copilot_plan: Option<String>,
+    /// Whether `.copilotignore` support is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copilotignore_enabled: Option<bool>,
+    /// Endpoint URLs associated with the authenticated user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoints: Option<CopilotUserResponseEndpoints>,
+    /// Organization login names associated with the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_login_list: Option<Vec<String>>,
+    /// Organization entries associated with the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_list: Option<Vec<Option<CopilotOrganization>>>,
+    /// Whether Codex agent features are enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_agent_enabled: Option<bool>,
+    /// Whether MCP features are enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_mcp_enabled: Option<bool>,
+    /// Quota reset date in local display form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_reset_date: Option<String>,
+    /// Quota snapshot payload keyed by quota type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_snapshots: Option<HashMap<String, Option<CopilotUserQuotaSnapshot>>>,
+    /// Whether telemetry is restricted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restricted_telemetry: Option<bool>,
+    /// Whether token-based billing is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_based_billing: Option<bool>,
+    /// Quota reset date in UTC form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_reset_date_utc: Option<String>,
+    /// Limited-user quota payload keyed by quota name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limited_user_quotas: Option<HashMap<String, f64>>,
+    /// Limited-user reset date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limited_user_reset_date: Option<String>,
+    /// Monthly quota payload keyed by quota name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monthly_quotas: Option<HashMap<String, f64>>,
+    /// Whether cloud session storage is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_session_storage_enabled: Option<bool>,
+    /// Whether CLI remote control is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_remote_control_enabled: Option<bool>,
+}
+
+/// Auth credential payload accepted by session-auth operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum AuthInfo {
+    /// HMAC-based authentication used by GitHub-internal services.
+    Hmac {
+        /// Authentication host.
+        host: String,
+        /// HMAC secret used to sign requests.
+        hmac: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// Personal access token or server token sourced from an environment variable.
+    Env {
+        /// Authentication host.
+        host: String,
+        /// User login associated with the token, when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        login: Option<String>,
+        /// The token value itself.
+        token: String,
+        /// Name of the environment variable the token was sourced from.
+        #[serde(rename = "envVar")]
+        env_var: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// SDK-side token authentication configured directly by the caller.
+    Token {
+        /// Authentication host.
+        host: String,
+        /// The token value itself.
+        token: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// Direct Copilot API authentication via environment-provided token settings.
+    CopilotApiToken {
+        /// Authentication host.
+        host: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// OAuth user authentication backed by the runtime's token store.
+    User {
+        /// Authentication host.
+        host: String,
+        /// OAuth user login.
+        login: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// Authentication delegated to the GitHub CLI.
+    GhCli {
+        /// Authentication host.
+        host: String,
+        /// User login reported by `gh auth status`.
+        login: String,
+        /// Token returned by `gh auth token`.
+        token: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+    /// API-key authentication for non-GitHub providers.
+    ApiKey {
+        /// The API key value.
+        #[serde(rename = "apiKey")]
+        api_key: String,
+        /// Authentication host.
+        host: String,
+        /// Snapshot of the authenticated user's Copilot subscription info.
+        #[serde(rename = "copilotUser", skip_serializing_if = "Option::is_none")]
+        copilot_user: Option<CopilotUserResponse>,
+    },
+}
+
 // =============================================================================
 // MCP Server Configuration
 // =============================================================================
@@ -1052,6 +1425,108 @@ pub struct CustomAgentConfig {
 // =============================================================================
 // Attachment Types
 // =============================================================================
+
+/// Optional line range to scope a file attachment to a specific section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendAttachmentFileLineRange {
+    /// Start line number (1-based).
+    pub start: u64,
+    /// End line number (1-based, inclusive).
+    pub end: u64,
+}
+
+/// Type of GitHub reference attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendAttachmentGithubReferenceType {
+    /// GitHub issue reference.
+    Issue,
+    /// GitHub pull-request reference.
+    Pr,
+    /// GitHub discussion reference.
+    Discussion,
+}
+
+/// Position within an editor selection attachment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendAttachmentSelectionPosition {
+    /// Line number (0-based).
+    pub line: u64,
+    /// Character offset within the line (0-based).
+    pub character: u64,
+}
+
+/// Position range for an editor selection attachment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendAttachmentSelectionDetails {
+    /// Start position of the selection.
+    pub start: SendAttachmentSelectionPosition,
+    /// End position of the selection.
+    pub end: SendAttachmentSelectionPosition,
+}
+
+/// A user message attachment payload sent to the runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SendAttachment {
+    /// File attachment.
+    File {
+        /// Absolute file path.
+        path: String,
+        /// User-facing display name for the attachment.
+        #[serde(rename = "displayName")]
+        display_name: String,
+        /// Optional line range limiting the attached region.
+        #[serde(rename = "lineRange", skip_serializing_if = "Option::is_none")]
+        line_range: Option<SendAttachmentFileLineRange>,
+    },
+    /// Directory attachment.
+    Directory {
+        /// Absolute directory path.
+        path: String,
+        /// User-facing display name for the attachment.
+        #[serde(rename = "displayName")]
+        display_name: String,
+    },
+    /// Code-selection attachment from an editor.
+    Selection {
+        /// Absolute path to the file containing the selection.
+        #[serde(rename = "filePath")]
+        file_path: String,
+        /// User-facing display name for the selection.
+        #[serde(rename = "displayName")]
+        display_name: String,
+        /// The selected text content.
+        text: String,
+        /// Position range of the selection within the file.
+        selection: SendAttachmentSelectionDetails,
+    },
+    /// GitHub issue, pull request, or discussion reference.
+    GithubReference {
+        /// Issue, pull request, or discussion number.
+        number: u64,
+        /// Title of the referenced item.
+        title: String,
+        /// Type of GitHub reference.
+        #[serde(rename = "referenceType")]
+        reference_type: SendAttachmentGithubReferenceType,
+        /// Current state of the referenced item.
+        state: String,
+        /// URL to the referenced item on GitHub.
+        url: String,
+    },
+    /// Inline blob attachment with base64-encoded contents.
+    Blob {
+        /// Base64-encoded content.
+        data: String,
+        /// MIME type of the inline data.
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        /// User-facing display name for the attachment.
+        #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+    },
+}
 
 /// Attachment item for user messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1538,6 +2013,284 @@ pub enum ElicitationMode {
     /// Browser redirect (URL mode).
     Url,
 }
+
+/// Accepted string-format hints for free-text elicitation fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UIElicitationSchemaPropertyStringFormat {
+    /// Email address string format.
+    Email,
+    /// URI string format.
+    Uri,
+    /// Calendar-date string format.
+    Date,
+    /// Date-time string format.
+    DateTime,
+}
+
+/// Numeric JSON type accepted by an elicitation field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UIElicitationSchemaPropertyNumberType {
+    /// Any JSON number.
+    Number,
+    /// Integer JSON numbers only.
+    Integer,
+}
+
+/// Selectable option for a labeled single-select string field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationStringOneOfFieldOption {
+    /// Value submitted when this option is selected.
+    pub r#const: String,
+    /// Display label for this option.
+    pub title: String,
+}
+
+/// Selectable option for a labeled multi-select string field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationArrayAnyOfFieldOption {
+    /// Value submitted when this option is selected.
+    pub r#const: String,
+    /// Display label for this option.
+    pub title: String,
+}
+
+/// Item schema for an inline string-enum array field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationArrayEnumFieldItems {
+    /// Type discriminator. Always `string`.
+    #[serde(rename = "type")]
+    pub item_type: String,
+    /// Allowed string values for each selected item.
+    pub r#enum: Vec<String>,
+}
+
+/// Item schema for a labeled multi-select array field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationArrayAnyOfFieldItems {
+    /// Selectable options, each with a value and a display label.
+    pub any_of: Vec<UIElicitationArrayAnyOfFieldOption>,
+}
+
+/// Single-select string field whose allowed values are defined inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationStringEnumField {
+    /// Type discriminator. Always `string`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Allowed string values.
+    pub r#enum: Vec<String>,
+    /// Optional display labels for each enum value, in the same order as `enum`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enum_names: Option<Vec<String>>,
+    /// Default value selected when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Single-select string field with labeled options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationStringOneOfField {
+    /// Type discriminator. Always `string`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Selectable options, each with a value and a display label.
+    pub one_of: Vec<UIElicitationStringOneOfFieldOption>,
+    /// Default value selected when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Multi-select string field whose allowed values are defined inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationArrayEnumField {
+    /// Type discriminator. Always `array`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Minimum number of items the user must select.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+    /// Maximum number of items the user may select.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
+    /// Schema applied to each item in the array.
+    pub items: UIElicitationArrayEnumFieldItems,
+    /// Default values selected when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Vec<String>>,
+}
+
+/// Multi-select string field with labeled options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationArrayAnyOfField {
+    /// Type discriminator. Always `array`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Minimum number of items the user must select.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+    /// Maximum number of items the user may select.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
+    /// Schema applied to each item in the array.
+    pub items: UIElicitationArrayAnyOfFieldItems,
+    /// Default values selected when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Vec<String>>,
+}
+
+/// Boolean elicitation field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationSchemaPropertyBoolean {
+    /// Type discriminator. Always `boolean`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Default value selected when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
+
+/// Free-text string elicitation field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationSchemaPropertyString {
+    /// Type discriminator. Always `string`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Minimum number of characters required.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u64>,
+    /// Maximum number of characters allowed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u64>,
+    /// Optional string-format hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<UIElicitationSchemaPropertyStringFormat>,
+    /// Default value populated in the input when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Numeric elicitation field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationSchemaPropertyNumber {
+    /// Numeric JSON type accepted by the field.
+    #[serde(rename = "type")]
+    pub field_type: UIElicitationSchemaPropertyNumberType,
+    /// Human-readable label for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Help text describing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Minimum allowed value (inclusive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+    /// Maximum allowed value (inclusive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
+    /// Default value populated in the input when the form is first shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
+}
+
+/// Schema for a single elicitation form field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UIElicitationSchemaProperty {
+    /// Inline string-enum field.
+    StringEnum(UIElicitationStringEnumField),
+    /// Labeled single-select string field.
+    StringOneOf(UIElicitationStringOneOfField),
+    /// Inline multi-select string field.
+    ArrayEnum(UIElicitationArrayEnumField),
+    /// Labeled multi-select string field.
+    ArrayAnyOf(UIElicitationArrayAnyOfField),
+    /// Boolean yes-or-no field.
+    Boolean(UIElicitationSchemaPropertyBoolean),
+    /// Free-text string field.
+    String(UIElicitationSchemaPropertyString),
+    /// Numeric field.
+    Number(UIElicitationSchemaPropertyNumber),
+}
+
+/// Form-schema description for a UI elicitation request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UIElicitationSchema {
+    /// Schema type indicator. Always `object`.
+    #[serde(rename = "type")]
+    pub schema_type: String,
+    /// Form field definitions keyed by field name.
+    pub properties: HashMap<String, UIElicitationSchemaProperty>,
+    /// List of required field names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
+}
+
+/// One submitted UI elicitation field value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UIElicitationFieldValue {
+    /// String field value.
+    String(String),
+    /// Numeric field value.
+    Number(f64),
+    /// Boolean field value.
+    Boolean(bool),
+    /// Multi-select string field value.
+    StringArray(Vec<String>),
+}
+
+/// The submitted content payload for an elicitation response.
+pub type UIElicitationResponseContent = HashMap<String, UIElicitationFieldValue>;
 
 /// Result returned from an elicitation request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2489,6 +3242,43 @@ pub struct SessionMetadata {
     pub summary: Option<String>,
     #[serde(default)]
     pub is_remote: bool,
+    /// Human-friendly name set via `/rename`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Runtime client name that created or last resumed this session.
+    #[serde(default)]
+    pub client_name: Option<String>,
+    /// True for detached maintenance sessions hidden from normal resume lists.
+    #[serde(default)]
+    pub is_detached: bool,
+    /// Working-directory and repository context recorded for the session.
+    #[serde(default)]
+    pub context: Option<SessionContext>,
+    /// GitHub task ID, when this local session is bound to one.
+    ///
+    /// Only present for local sessions exported to remote control.
+    #[serde(default)]
+    pub mc_task_id: Option<String>,
+}
+
+/// Working-directory and repository context recorded for a session.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionContext {
+    /// Most recent working directory for this session.
+    pub cwd: String,
+    /// Git repository root, if the cwd was inside a git repo.
+    #[serde(default)]
+    pub git_root: Option<String>,
+    /// Repository slug in `owner/name` form, when known.
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// Repository host type.
+    #[serde(default)]
+    pub host_type: Option<String>,
+    /// Active git branch.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 /// Response from a ping request.
@@ -2581,6 +3371,51 @@ pub struct ModelPolicy {
 pub struct ModelBilling {
     #[serde(default)]
     pub multiplier: f64,
+    /// Token-level pricing information for this model.
+    #[serde(default)]
+    pub token_prices: Option<ModelBillingTokenPrices>,
+}
+
+/// Token-level pricing information for a model.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBillingTokenPrices {
+    /// AI Credits cost per billing batch of input tokens.
+    #[serde(default)]
+    pub input_price: Option<f64>,
+    /// AI Credits cost per billing batch of output tokens.
+    #[serde(default)]
+    pub output_price: Option<f64>,
+    /// AI Credits cost per billing batch of cached tokens.
+    #[serde(default)]
+    pub cache_price: Option<f64>,
+    /// Number of tokens per standard billing batch.
+    #[serde(default)]
+    pub batch_size: Option<u64>,
+    /// Maximum context window tokens for the default tier.
+    #[serde(default)]
+    pub context_max: Option<u64>,
+    /// Long context tier pricing, for models with extended context windows.
+    #[serde(default)]
+    pub long_context: Option<ModelBillingTokenPricesLongContext>,
+}
+
+/// Long context tier pricing for a model.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBillingTokenPricesLongContext {
+    /// AI Credits cost per billing batch of input tokens.
+    #[serde(default)]
+    pub input_price: Option<f64>,
+    /// AI Credits cost per billing batch of output tokens.
+    #[serde(default)]
+    pub output_price: Option<f64>,
+    /// AI Credits cost per billing batch of cached tokens.
+    #[serde(default)]
+    pub cache_price: Option<f64>,
+    /// Maximum context window tokens for the long context tier.
+    #[serde(default)]
+    pub context_max: Option<u64>,
 }
 
 /// Information about an available model.
@@ -2838,14 +3673,72 @@ pub struct PlanData {
 // =============================================================================
 
 /// Information about an available agent.
+///
+/// Mirrors the `AgentInfo` schema definition returned by `session.agent.list`
+/// and `session.agent.getCurrent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
+    /// Unique identifier of the custom agent.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Stable identifier used for selection.
+    ///
+    /// For most agents this equals `name`; for plugin and builtin agents it may
+    /// differ. The runtime always populates it, so a missing key only occurs
+    /// against older CLIs and yields an empty string.
+    #[serde(default)]
+    pub id: String,
+    /// Absolute local path of the agent definition.
+    ///
+    /// Only set for file-based agents loaded from disk; remote agents have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Where the agent definition was loaded from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<AgentInfoSource>,
+    /// Whether the agent can be selected directly by the user.
+    ///
+    /// Agents marked `false` are subagent-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_invocable: Option<bool>,
+    /// Allowed tool names for this agent.
+    ///
+    /// An empty vector means none; `None` means inherit the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+    /// Preferred model id, inheriting the outer agent's model when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// MCP server configurations attached to this agent, keyed by server name.
+    ///
+    /// Values mirror the MCP `mcpServers` schema and are carried verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<HashMap<String, serde_json::Value>>,
+    /// Skill names preloaded into this agent's context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+}
+
+/// Where an agent definition was loaded from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentInfoSource {
+    /// Loaded from the user's personal agent configuration.
+    User,
+    /// Loaded from the current project's repository configuration.
+    Project,
+    /// Inherited from a parent project or workspace.
+    Inherited,
+    /// Provided by a remote runtime or service.
+    Remote,
+    /// Contributed by an installed plugin.
+    Plugin,
+    /// Built into the Copilot runtime.
+    Builtin,
 }
 
 // =============================================================================
@@ -2976,6 +3869,16 @@ pub struct TelemetryConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_type_tag_roundtrip<T>(value: T, expected_tag: &str)
+    where
+        T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(json["type"], expected_tag);
+        let decoded: T = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, value);
+    }
 
     #[test]
     fn test_tool_result_text() {
@@ -3733,5 +4636,174 @@ mod tests {
     fn test_set_model_options_default_is_empty_object() {
         let v = serde_json::to_value(SetModelOptions::default()).unwrap();
         assert_eq!(v, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_send_attachment_directory_roundtrip() {
+        let attachment = SendAttachment::Directory {
+            path: "C:/repo/src".into(),
+            display_name: "src".into(),
+        };
+        assert_type_tag_roundtrip(attachment, "directory");
+    }
+
+    #[test]
+    fn test_send_attachment_github_reference_roundtrip() {
+        let attachment = SendAttachment::GithubReference {
+            number: 42,
+            title: "Fix type coverage".into(),
+            reference_type: SendAttachmentGithubReferenceType::Pr,
+            state: "open".into(),
+            url: "https://github.com/copilot-community-sdk/copilot-sdk-rust/pull/42".into(),
+        };
+        assert_type_tag_roundtrip(attachment, "github_reference");
+    }
+
+    #[test]
+    fn test_send_attachment_blob_roundtrip() {
+        let attachment = SendAttachment::Blob {
+            data: "aGVsbG8=".into(),
+            mime_type: "text/plain".into(),
+            display_name: Some("hello.txt".into()),
+        };
+        assert_type_tag_roundtrip(attachment, "blob");
+    }
+
+    #[test]
+    fn test_external_tool_terminal_roundtrip() {
+        let content = ExternalToolTextResultForLlmContent::Terminal {
+            text: "cargo test".into(),
+            exit_code: Some(0),
+            cwd: Some("E:/copilot-sdk-rust".into()),
+        };
+        assert_type_tag_roundtrip(content, "terminal");
+    }
+
+    #[test]
+    fn test_external_tool_image_roundtrip() {
+        let content = ExternalToolTextResultForLlmContent::Image {
+            data: "iVBORw0KGgo=".into(),
+            mime_type: "image/png".into(),
+        };
+        assert_type_tag_roundtrip(content, "image");
+    }
+
+    #[test]
+    fn test_external_tool_audio_roundtrip() {
+        let content = ExternalToolTextResultForLlmContent::Audio {
+            data: "UklGRg==".into(),
+            mime_type: "audio/wav".into(),
+        };
+        assert_type_tag_roundtrip(content, "audio");
+    }
+
+    #[test]
+    fn test_external_tool_resource_link_roundtrip() {
+        let content = ExternalToolTextResultForLlmContent::ResourceLink {
+            icons: Some(vec![ExternalToolTextResultForLlmContentResourceLinkIcon {
+                src: "https://example.com/icon.png".into(),
+                mime_type: Some("image/png".into()),
+                sizes: Some(vec!["16x16".into()]),
+                theme: Some(ExternalToolTextResultForLlmContentResourceLinkIconTheme::Dark),
+            }]),
+            name: "artifact".into(),
+            title: Some("Build Artifact".into()),
+            uri: "artifact://build/123".into(),
+            description: Some("Compiled binary".into()),
+            mime_type: Some("application/octet-stream".into()),
+            size: Some(512),
+        };
+        assert_type_tag_roundtrip(content, "resource_link");
+    }
+
+    #[test]
+    fn test_external_tool_resource_roundtrip() {
+        let content = ExternalToolTextResultForLlmContent::Resource {
+            resource: ExternalToolTextResultForLlmContentResourceDetails::Text(
+                EmbeddedTextResourceContents {
+                    uri: "file:///tmp/output.txt".into(),
+                    mime_type: Some("text/plain".into()),
+                    text: "done".into(),
+                },
+            ),
+        };
+        assert_type_tag_roundtrip(content, "resource");
+    }
+
+    #[test]
+    fn test_auth_info_hmac_roundtrip() {
+        let auth = AuthInfo::Hmac {
+            host: "https://github.com".into(),
+            hmac: "secret".into(),
+            copilot_user: None,
+        };
+        assert_type_tag_roundtrip(auth, "hmac");
+    }
+
+    #[test]
+    fn test_auth_info_env_roundtrip() {
+        let auth = AuthInfo::Env {
+            host: "https://github.example.com".into(),
+            login: Some("octocat".into()),
+            token: "ghp_example".into(),
+            env_var: "GITHUB_TOKEN".into(),
+            copilot_user: None,
+        };
+        assert_type_tag_roundtrip(auth, "env");
+    }
+
+    #[test]
+    fn test_auth_info_token_roundtrip() {
+        let auth = AuthInfo::Token {
+            host: "https://github.com".into(),
+            token: "ghp_direct".into(),
+            copilot_user: None,
+        };
+        assert_type_tag_roundtrip(auth, "token");
+    }
+
+    #[test]
+    fn test_ui_elicitation_array_any_of_items_roundtrip() {
+        let schema = UIElicitationSchema {
+            schema_type: "object".into(),
+            properties: HashMap::from([(
+                "targets".into(),
+                UIElicitationSchemaProperty::ArrayAnyOf(UIElicitationArrayAnyOfField {
+                    field_type: "array".into(),
+                    title: Some("Targets".into()),
+                    description: Some("Choose one or more targets.".into()),
+                    min_items: Some(1),
+                    max_items: Some(2),
+                    items: UIElicitationArrayAnyOfFieldItems {
+                        any_of: vec![
+                            UIElicitationArrayAnyOfFieldOption {
+                                r#const: "linux".into(),
+                                title: "Linux".into(),
+                            },
+                            UIElicitationArrayAnyOfFieldOption {
+                                r#const: "windows".into(),
+                                title: "Windows".into(),
+                            },
+                        ],
+                    },
+                    default: Some(vec!["linux".into()]),
+                }),
+            )]),
+            required: Some(vec!["targets".into()]),
+        };
+
+        let json = serde_json::to_value(&schema).unwrap();
+        assert_eq!(json["properties"]["targets"]["type"], "array");
+        assert_eq!(
+            json["properties"]["targets"]["items"]["anyOf"][0]["const"],
+            "linux"
+        );
+        assert_eq!(
+            json["properties"]["targets"]["items"]["anyOf"][0]["title"],
+            "Linux"
+        );
+
+        let decoded: UIElicitationSchema = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, schema);
     }
 }

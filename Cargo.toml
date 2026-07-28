@@ -1,6 +1,6 @@
 [package]
 name = "copilot-sdk"
-version = "0.1.17"
+version = "3.1.1"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -156,3 +156,27 @@ path = "examples/telemetry.rs"
 [[example]]
 name = "shell_exec"
 path = "examples/shell_exec.rs"
+
+[[example]]
+name = "rpc_permissions"
+path = "examples/rpc_permissions.rs"
+
+[[example]]
+name = "rpc_tasks"
+path = "examples/rpc_tasks.rs"
+
+[[example]]
+name = "rpc_skills"
+path = "examples/rpc_skills.rs"
+
+[[example]]
+name = "rpc_mcp"
+path = "examples/rpc_mcp.rs"
+
+[[example]]
+name = "rpc_sessions"
+path = "examples/rpc_sessions.rs"
+
+[[example]]
+name = "rpc_metadata"
+path = "examples/rpc_metadata.rs"
