@@ -37,3 +37,30 @@ jobs:
 
       - name: Package
         run: cargo package
+
+  parity:
+    name: rpc parity gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Fails if the crate invokes or serves an RPC method that is not declared
+      # in schemas/api.schema.json and is not a documented off-schema exception,
+      # or if a previously bound method regressed to unbound.
+      - name: RPC parity gate
+        run: cargo test --test rpc_parity -- --nocapture
+
+      # Fails if src/generated/methods.rs was hand-edited or has drifted from
+      # the vendored schema. The generated registry must always be reproducible.
+      - name: Codegen drift check
+        run: |
+          cargo run --manifest-path codegen/Cargo.toml
+          git diff --exit-code -- src/generated/methods.rs

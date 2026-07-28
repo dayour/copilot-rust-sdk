@@ -55,6 +55,18 @@ fn main() {
     let out_path = out_dir.join("methods.rs");
     std::fs::write(&out_path, out).expect("write methods.rs");
 
+    // Normalize through rustfmt so the emitted file is byte-identical to what
+    // `cargo fmt` would produce. Without this the CI drift check would fail
+    // forever: rustfmt rewraps long constant lines that the renderer emits on
+    // a single line.
+    let fmt = std::process::Command::new("rustfmt")
+        .arg("--edition")
+        .arg("2021")
+        .arg(&out_path)
+        .status()
+        .expect("run rustfmt (is the rustfmt component installed?)");
+    assert!(fmt.success(), "rustfmt failed on {}", out_path.display());
+
     println!(
         "generated {} ({} methods: {} server, {} session, {} clientSession)",
         out_path.display(),
