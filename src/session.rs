@@ -17,9 +17,9 @@ use crate::types::{
     MessageOptions, PermissionRequest, PermissionRequestResult, PlanData, PostToolUseHookInput,
     PreToolUseHookInput, SectionTransformFn, SessionCapabilities, SessionEndHookInput,
     SessionHooks, SessionMode, SessionStartHookInput, SessionUpdateOptions, SetModelOptions,
-    ShellExecOptions, ShellExecResult, ShellSignal, Tool, ToolResultObject, UiInputOptions,
-    UserInputInvocation, UserInputRequest, UserInputResponse, UserPromptSubmittedHookInput,
-    WorkspaceFile,
+    ShellExecOptions, ShellExecResult, ShellSignal, Tool, ToolResultObject, UiCapabilities,
+    UiInputOptions, UserInputInvocation, UserInputRequest, UserInputResponse,
+    UserPromptSubmittedHookInput, WorkspaceFile,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -312,6 +312,11 @@ impl Session {
         // Fire-and-forget: the response is sent asynchronously via RPC.
         self.handle_broadcast_event(&event).await;
 
+        // Keep the cached capabilities live. Without this, `capabilities()` would
+        // report whatever the host advertised at create/resume time and silently
+        // go stale for the rest of the session.
+        self.merge_capabilities_from_event(&event).await;
+
         // Send to broadcast channel
         let _ = self.event_tx.send(event.clone());
 
@@ -320,6 +325,29 @@ impl Session {
         for handler in state.event_handlers.values() {
             handler(&event);
         }
+    }
+
+    /// Fold a `capabilities.changed` event into the cached session capabilities.
+    ///
+    /// Mirrors the upstream Node.js SDK, which applies a shallow top-level merge
+    /// (`{ ...this._capabilities, ...event.data }`). Because `ui` is the only
+    /// top-level member, a payload that carries `ui` replaces the cached `ui`
+    /// wholesale rather than merging field by field; a payload that omits `ui`
+    /// leaves the cached value untouched.
+    async fn merge_capabilities_from_event(&self, event: &SessionEvent) {
+        let SessionEventData::CapabilitiesChanged(ref data) = event.data else {
+            return;
+        };
+        let Some(ref ui) = data.ui else {
+            return;
+        };
+
+        let mut state = self.state.write().await;
+        state.capabilities.ui = Some(UiCapabilities {
+            elicitation: ui.elicitation,
+            mcp_apps: ui.mcp_apps,
+            canvases: ui.canvases,
+        });
     }
 
     /// Handle broadcast request events by executing local handlers and responding via RPC.
@@ -2122,6 +2150,74 @@ mod tests {
         assert!(!session.capabilities().await.supports_elicitation());
 
         session.set_capabilities(supported_caps()).await;
+        assert!(session.capabilities().await.supports_elicitation());
+    }
+
+    fn capabilities_changed_event(
+        elicitation: Option<bool>,
+        canvases: Option<bool>,
+    ) -> SessionEvent {
+        SessionEvent {
+            id: "evt-caps".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            event_type: "capabilities.changed".to_string(),
+            parent_id: None,
+            ephemeral: None,
+            data: SessionEventData::CapabilitiesChanged(crate::events::CapabilitiesChangedData {
+                ui: Some(crate::events::CapabilitiesChangedUi {
+                    canvases,
+                    elicitation,
+                    mcp_apps: None,
+                }),
+            }),
+        }
+    }
+
+    /// Regression: `capabilities()` used to report only what the host advertised
+    /// at create/resume time, so it went stale as soon as the host sent
+    /// `capabilities.changed`.
+    #[tokio::test]
+    async fn test_capabilities_changed_event_updates_cached_capabilities() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        assert!(!session.capabilities().await.supports_elicitation());
+        assert!(!session.capabilities().await.supports_canvases());
+
+        session
+            .dispatch_event(capabilities_changed_event(Some(true), Some(true)))
+            .await;
+
+        assert!(session.capabilities().await.supports_elicitation());
+        assert!(session.capabilities().await.supports_canvases());
+
+        // A later event revoking a capability must also be reflected.
+        session
+            .dispatch_event(capabilities_changed_event(Some(false), Some(true)))
+            .await;
+
+        assert!(!session.capabilities().await.supports_elicitation());
+        assert!(session.capabilities().await.supports_canvases());
+    }
+
+    /// A `capabilities.changed` payload with no `ui` member must leave the
+    /// cached capabilities untouched, matching the upstream shallow merge.
+    #[tokio::test]
+    async fn test_capabilities_changed_without_ui_preserves_existing() {
+        let session = Session::new("test".to_string(), None, mock_invoke);
+        session.set_capabilities(supported_caps()).await;
+
+        session
+            .dispatch_event(SessionEvent {
+                id: "evt-caps-empty".to_string(),
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                event_type: "capabilities.changed".to_string(),
+                parent_id: None,
+                ephemeral: None,
+                data: SessionEventData::CapabilitiesChanged(
+                    crate::events::CapabilitiesChangedData { ui: None },
+                ),
+            })
+            .await;
+
         assert!(session.capabilities().await.supports_elicitation());
     }
 
