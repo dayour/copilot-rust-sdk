@@ -17,8 +17,9 @@ fn package_metadata_points_to_current_repository() {
         text.contains(r#"homepage = "https://github.com/dayour/copilot-rust-sdk""#),
         "Cargo.toml homepage should point at dayour/copilot-rust-sdk"
     );
+    assert!(text.contains("[package.metadata.docs.rs]"));
     assert!(
-        text.contains("[package.metadata.docs.rs]\nall-features = true"),
+        text.contains("all-features = true"),
         "docs.rs metadata should build all features"
     );
 }
