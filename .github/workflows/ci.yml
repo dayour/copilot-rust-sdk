@@ -33,7 +33,7 @@ jobs:
         run: cargo test
 
       - name: Doc
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --all-features
 
       - name: Package
         run: cargo package
