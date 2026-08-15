@@ -24,7 +24,9 @@ Feature-gated tests:
 
 ## Coding Style & Naming
 
-- Rust `1.85.0` is pinned in `rust-toolchain.toml` (Edition 2024).
+- Rust `1.85.0` is pinned in `rust-toolchain.toml` (Edition 2021).
+- MSRV is Rust 1.85 until explicitly raised in `Cargo.toml`,
+  `rust-toolchain.toml`, and `docs/msrv-policy.md`.
 - Format with `rustfmt`; lint with `clippy`.
 - Keep `unsafe` out: the crate uses `#![forbid(unsafe_code)]`.
 - Maintain attribution headers at the top of Rust files (`tests/attribution_headers.rs` enforces this).
@@ -33,6 +35,8 @@ Feature-gated tests:
 
 - Commit convention is not established in this repo’s current history; use Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`) and keep commits focused.
 - PRs should include: what/why, how to test (commands), and docs/example updates for API or behavior changes.
+- Document user-visible release changes in `CHANGELOG.md`; follow
+  `docs/semver-policy.md` for compatibility expectations.
 
 ## Security & Configuration Tips
 
