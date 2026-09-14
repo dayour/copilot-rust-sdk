@@ -1977,7 +1977,8 @@ impl SessionEvent {
 
 /// Parse event data based on event type string.
 fn parse_event_data(event_type: &str, data: serde_json::Value) -> SessionEventData {
-    match event_type {
+    let raw_data = data.clone();
+    let parsed = match event_type {
         "session.start" => serde_json::from_value(data)
             .map(SessionEventData::SessionStart)
             .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
@@ -2240,6 +2241,11 @@ fn parse_event_data(event_type: &str, data: serde_json::Value) -> SessionEventDa
             .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
         // Unknown event type - preserve raw data
         _ => SessionEventData::Unknown(data),
+    };
+
+    match parsed {
+        SessionEventData::Unknown(serde_json::Value::Null) => SessionEventData::Unknown(raw_data),
+        data => data,
     }
 }
 
@@ -2506,18 +2512,43 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_event() {
+        let raw_data = json!({
+            "someField": "someValue"
+        });
         let json = json!({
             "id": "evt_128",
             "timestamp": "2024-01-15T10:30:05Z",
             "type": "future.unknown_event",
-            "data": {
-                "someField": "someValue"
-            }
+            "data": raw_data.clone()
         });
 
         let event = SessionEvent::from_json(&json).unwrap();
         assert_eq!(event.event_type, "future.unknown_event");
-        assert!(matches!(event.data, SessionEventData::Unknown(_)));
+        assert!(matches!(
+            event.data,
+            SessionEventData::Unknown(data) if data == raw_data
+        ));
+    }
+
+    #[test]
+    fn test_malformed_known_event_preserves_raw_data() {
+        let raw_data = json!({
+            "messageId": 42,
+            "content": ["unexpected", "shape"]
+        });
+        let json = json!({
+            "id": "evt_malformed",
+            "timestamp": "2024-01-15T10:30:05Z",
+            "type": "assistant.message",
+            "data": raw_data.clone()
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        assert_eq!(event.event_type, "assistant.message");
+        assert!(matches!(
+            event.data,
+            SessionEventData::Unknown(data) if data == raw_data
+        ));
     }
 
     #[test]
