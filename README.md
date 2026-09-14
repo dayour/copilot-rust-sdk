@@ -6,9 +6,16 @@ This is a Rust port of the upstream SDKs and is currently in technical preview.
 
 ## Requirements
 
-- Rust 1.85+ (Edition 2024)
+- Rust 1.85+ (Edition 2021)
 - GitHub Copilot CLI installed and authenticated
 - `copilot` available in `PATH`, or set `COPILOT_CLI_PATH` to the CLI executable/script
+
+## Release Policy
+
+- Changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+- API compatibility follows the repository [semver policy](docs/semver-policy.md).
+- The minimum supported Rust version is Rust 1.85 until explicitly raised; see
+  the [MSRV policy](docs/msrv-policy.md).
 
 ## Install
 
