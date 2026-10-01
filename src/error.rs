@@ -17,6 +17,10 @@ pub enum CopilotError {
     #[error("Connection closed")]
     ConnectionClosed,
 
+    /// Session event subscription fell behind and lost the given number of events.
+    #[error("Event subscription lagged; skipped {0} session events")]
+    EventsLagged(u64),
+
     /// Client is not connected
     #[error("Not connected")]
     NotConnected,

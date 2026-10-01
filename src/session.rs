@@ -22,7 +22,7 @@ use crate::types::{
     UserPromptSubmittedHookInput, WorkspaceFile,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1575,6 +1575,7 @@ impl Session {
     ///
     /// Returns the last assistant message event, or None if no message was received.
     /// Uses the specified timeout, or 60 seconds if None.
+    /// Returns [`CopilotError::EventsLagged`] if the subscription loses events.
     pub async fn wait_for_idle(&self, timeout: Option<Duration>) -> Result<Option<SessionEvent>> {
         let timeout = timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
         let mut subscription = self.subscribe();
@@ -1604,8 +1605,8 @@ impl Session {
                     Err(broadcast::error::RecvError::Closed) => {
                         return Err(CopilotError::ConnectionClosed);
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // Continue - we missed some events but can recover
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        return Err(CopilotError::EventsLagged(skipped));
                     }
                 }
             }
@@ -1636,27 +1637,34 @@ impl Session {
 
     /// Send a message and wait for the response content as a string.
     ///
-    /// Convenience method that collects all assistant message/delta content.
+    /// Collects assistant content, using deltas for streamed messages and the
+    /// full message otherwise, without appending both for the same message.
     /// Uses the specified timeout, or 60 seconds if None.
+    /// Returns [`CopilotError::EventsLagged`] rather than incomplete content if
+    /// the subscription loses events.
     pub async fn send_and_collect(
         &self,
         options: impl Into<MessageOptions>,
         timeout: Option<Duration>,
     ) -> Result<String> {
         let timeout = timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
+        let mut subscription = self.subscribe();
         self.send(options).await?;
 
-        let mut subscription = self.subscribe();
         let mut content = String::new();
+        let mut streamed_messages = HashSet::new();
 
         let result = tokio::time::timeout(timeout, async {
             loop {
                 match subscription.recv().await {
                     Ok(event) => match &event.data {
                         SessionEventData::AssistantMessage(msg) => {
-                            content.push_str(&msg.content);
+                            if !streamed_messages.contains(&msg.message_id) {
+                                content.push_str(&msg.content);
+                            }
                         }
                         SessionEventData::AssistantMessageDelta(delta) => {
+                            streamed_messages.insert(delta.message_id.clone());
                             content.push_str(&delta.delta_content);
                         }
                         SessionEventData::SessionIdle(_) => {
@@ -1673,7 +1681,9 @@ impl Session {
                     Err(broadcast::error::RecvError::Closed) => {
                         return Err(CopilotError::ConnectionClosed);
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        return Err(CopilotError::EventsLagged(skipped));
+                    }
                 }
             }
             Ok(())
