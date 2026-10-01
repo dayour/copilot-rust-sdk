@@ -2731,7 +2731,7 @@ mod tests {
         ] {
             let (client, server, mut control) = monitored_test_client(command).await;
             let rpc = client.rpc.lock().await.clone().unwrap();
-            let request = tokio::spawn(async move { rpc.invoke("pending", None).await });
+            let request = tokio::spawn(async move { rpc.invoke("ping", None).await });
             let mut reader = MessageReader::new(server);
             reader.read_message().await.unwrap();
 
@@ -2759,7 +2759,7 @@ mod tests {
 
         let (client, server, mut control) = monitored_test_client("read line; exit 17").await;
         let pending_client = Arc::clone(&client);
-        let request = tokio::spawn(async move { pending_client.invoke("pending", None).await });
+        let request = tokio::spawn(async move { pending_client.invoke("ping", None).await });
         let mut reader = MessageReader::new(server);
         reader.read_message().await.unwrap();
         control.write(b"exit\n").await.unwrap();
@@ -2781,7 +2781,7 @@ mod tests {
         for force in [false, true] {
             let (client, server, _control) = monitored_test_client("read line").await;
             let pending_client = Arc::clone(&client);
-            let request = tokio::spawn(async move { pending_client.invoke("pending", None).await });
+            let request = tokio::spawn(async move { pending_client.invoke("ping", None).await });
             let mut reader = MessageReader::new(server);
             reader.read_message().await.unwrap();
             tokio::time::timeout(Duration::from_secs(5), async {

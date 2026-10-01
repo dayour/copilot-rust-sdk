@@ -521,3 +521,12 @@ async fn dropping_generic_client_releases_its_reader() {
     drop(client);
     assert_eq!(promptly(peer.read(&mut [0; 1])).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn dropping_tcp_client_releases_its_reader() {
+    let (stream, mut peer) = tcp_pair().await;
+    let client = TcpJsonRpcClient::new(stream);
+    client.start().await.unwrap();
+    drop(client);
+    assert_eq!(promptly(peer.read(&mut [0; 1])).await.unwrap(), 0);
+}
