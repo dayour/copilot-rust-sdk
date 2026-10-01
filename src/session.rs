@@ -721,7 +721,7 @@ impl Session {
 
     /// Register a tool with an invocation-aware handler.
     ///
-    /// The handler receives the raw arguments plus a [`ToolInvocation`]
+    /// The handler receives the raw arguments plus a [`ToolInvocation`](crate::types::ToolInvocation)
     /// (session id, tool-call id, and propagated W3C Trace Context), matching
     /// nodejs's `ToolHandler(args, invocation)` signature. Preferred over
     /// [`register_tool_with_handler`](Self::register_tool_with_handler) for new code.

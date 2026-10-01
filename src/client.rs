@@ -860,9 +860,7 @@ async fn apply_session_callbacks(
         session.register_exit_plan_mode_handler_arc(handler).await;
     }
     if let Some(handler) = callbacks.on_auto_mode_switch {
-        session
-            .register_auto_mode_switch_handler_arc(handler)
-            .await;
+        session.register_auto_mode_switch_handler_arc(handler).await;
     }
 }
 

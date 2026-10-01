@@ -2016,10 +2016,7 @@ impl std::fmt::Debug for SessionCallbacks {
         f.debug_struct("SessionCallbacks")
             .field("on_elicitation", &self.on_elicitation.is_some())
             .field("on_exit_plan_mode", &self.on_exit_plan_mode.is_some())
-            .field(
-                "on_auto_mode_switch",
-                &self.on_auto_mode_switch.is_some(),
-            )
+            .field("on_auto_mode_switch", &self.on_auto_mode_switch.is_some())
             .field(
                 "tool_handlers",
                 &self.tool_handlers.keys().collect::<Vec<_>>(),
@@ -4756,7 +4753,7 @@ mod tests {
             title: "Fix type coverage".into(),
             reference_type: SendAttachmentGithubReferenceType::Pr,
             state: "open".into(),
-            url: "https://github.com/copilot-community-sdk/copilot-sdk-rust/pull/42".into(),
+            url: "https://github.com/dayour/copilot-rust-sdk/pull/42".into(),
         };
         assert_type_tag_roundtrip(attachment, "github_reference");
     }

@@ -283,6 +283,10 @@ cargo run --example telemetry           # OpenTelemetry setup
 cargo run --example shell_exec          # Shell commands
 cargo run --example hooks               # Session hooks
 cargo run --example byok                # Bring Your Own Key
+cargo run --example user_input          # User input requests
+cargo run --example list_models         # Enumerate models
+cargo run --example fluent_tools       # Fluent tool builder
+cargo run --example rpc_sessions       # Typed RPC: sessions (also rpc_mcp, rpc_skills, rpc_tasks, rpc_permissions, rpc_metadata)
 ```
 
 ## Development
