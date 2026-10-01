@@ -12,6 +12,10 @@ and this project follows the versioning policy documented in
 
 - Added release policy documentation for changelog, semver, and MSRV handling.
 
+### Fixed
+
+- Preserve raw JSON payloads when known session events fail typed decoding.
+
 ## 3.1.1 - 2026-08-15
 
 ### Added
