@@ -1,12 +1,12 @@
 # copilot-sdk (Rust)
 
-Rust SDK for interacting with the GitHub Copilot CLI agent runtime (JSON-RPC over stdio or TCP).
+Rust SDK for interacting with various layers of Copilot agent runtimes (JSON-RPC over stdio or TCP).
 
-This is a Rust port of the upstream SDKs and is currently in technical preview.
+This is a research and development tool, not intended for production use.
 
 ## Requirements
 
-- Rust 1.85+ (Edition 2021)
+- Rust 1.99+ (Edition 2026)
 - GitHub Copilot CLI installed and authenticated
 - `copilot` available in `PATH`, or set `COPILOT_CLI_PATH` to the CLI executable/script
 
