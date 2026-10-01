@@ -229,8 +229,12 @@ impl CopilotProcess {
 
     /// Wait for the process to exit.
     pub async fn wait(&mut self) -> Result<i32> {
+        Ok(self.wait_for_exit().await?.unwrap_or(-1))
+    }
+
+    pub(crate) async fn wait_for_exit(&mut self) -> Result<Option<i32>> {
         let status = self.child.wait().await.map_err(CopilotError::Transport)?;
-        Ok(status.code().unwrap_or(-1))
+        Ok(status.code())
     }
 
     /// Request termination of the process.

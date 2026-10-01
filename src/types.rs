@@ -2016,10 +2016,7 @@ impl std::fmt::Debug for SessionCallbacks {
         f.debug_struct("SessionCallbacks")
             .field("on_elicitation", &self.on_elicitation.is_some())
             .field("on_exit_plan_mode", &self.on_exit_plan_mode.is_some())
-            .field(
-                "on_auto_mode_switch",
-                &self.on_auto_mode_switch.is_some(),
-            )
+            .field("on_auto_mode_switch", &self.on_auto_mode_switch.is_some())
             .field(
                 "tool_handlers",
                 &self.tool_handlers.keys().collect::<Vec<_>>(),

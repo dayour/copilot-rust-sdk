@@ -860,9 +860,7 @@ async fn apply_session_callbacks(
         session.register_exit_plan_mode_handler_arc(handler).await;
     }
     if let Some(handler) = callbacks.on_auto_mode_switch {
-        session
-            .register_auto_mode_switch_handler_arc(handler)
-            .await;
+        session.register_auto_mode_switch_handler_arc(handler).await;
     }
 }
 
@@ -940,6 +938,14 @@ enum RpcClient {
 }
 
 impl RpcClient {
+    async fn disconnect(&self) {
+        match self {
+            RpcClient::Stdio(rpc) => rpc.disconnect().await,
+            RpcClient::Tcp(rpc) => rpc.disconnect().await,
+            RpcClient::ParentStdio(rpc) => rpc.disconnect().await,
+        }
+    }
+
     async fn stop(&self) {
         match self {
             RpcClient::Stdio(rpc) => rpc.stop().await,
@@ -1049,8 +1055,10 @@ pub struct Client {
     options: ClientOptions,
     state: Arc<RwLock<ConnectionState>>,
     lifecycle: Mutex<()>,
-    process: Mutex<Option<CopilotProcess>>,
-    rpc: Arc<Mutex<Option<RpcClient>>>,
+    process: Arc<Mutex<Option<CopilotProcess>>>,
+    process_monitor: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    process_exit: Arc<RwLock<Option<Option<i32>>>>,
+    rpc: Arc<Mutex<Option<Arc<RpcClient>>>>,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     lifecycle_handlers: Arc<RwLock<HashMap<u64, LifecycleHandler>>>,
     next_lifecycle_handler_id: AtomicU64,
@@ -1125,7 +1133,9 @@ impl Client {
             options,
             state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             lifecycle: Mutex::new(()),
-            process: Mutex::new(None),
+            process: Arc::new(Mutex::new(None)),
+            process_monitor: Mutex::new(None),
+            process_exit: Arc::new(RwLock::new(None)),
             rpc: Arc::new(Mutex::new(None)),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             lifecycle_handlers: Arc::new(RwLock::new(HashMap::new())),
@@ -1147,7 +1157,10 @@ impl Client {
     /// Start the client and connect to the server.
     pub async fn start(&self) -> Result<()> {
         let _guard = self.lifecycle.lock().await;
+        self.start_locked().await
+    }
 
+    async fn start_locked(&self) -> Result<()> {
         let mut state = self.state.write().await;
         if *state == ConnectionState::Connected {
             return Ok(());
@@ -1159,6 +1172,7 @@ impl Client {
         }
         *state = ConnectionState::Connecting;
         drop(state);
+        *self.process_exit.write().await = None;
 
         // Start CLI server process
         let result = self.start_cli_server().await;
@@ -1170,13 +1184,20 @@ impl Client {
         // Verify protocol version
         if let Err(e) = self.verify_protocol_version().await {
             *self.state.write().await = ConnectionState::Error;
-            return Err(e);
+            return Err(self.with_process_exit(e).await);
         }
 
         // Set up event handlers
         self.setup_handlers().await?;
 
-        *self.state.write().await = ConnectionState::Connected;
+        {
+            let mut state = self.state.write().await;
+            if *state == ConnectionState::Error {
+                drop(state);
+                return Err(self.with_process_exit(CopilotError::ConnectionClosed).await);
+            }
+            *state = ConnectionState::Connected;
+        }
 
         // Advertise the client-provided session filesystem, if configured.
         if let Err(e) = self.announce_session_fs().await {
@@ -1196,7 +1217,7 @@ impl Client {
         let params = Some(serde_json::to_value(config)?);
         // Called from `start`, so bypass the auto-restart wrapper in `invoke`
         // to avoid a recursive start cycle.
-        let rpc = self.rpc.lock().await;
+        let rpc = self.rpc.lock().await.clone();
         let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
         rpc.invoke("sessionFs.setProvider", params).await?;
         Ok(())
@@ -1273,6 +1294,8 @@ impl Client {
             return errors;
         }
 
+        self.stop_process_monitor().await;
+
         // Best-effort destroy of all active sessions while still connected.
         let sessions: Vec<Arc<Session>> = self.sessions.read().await.values().cloned().collect();
         for session in sessions {
@@ -1304,17 +1327,23 @@ impl Client {
     /// Force stop the client immediately.
     pub async fn force_stop(&self) {
         let _guard = self.lifecycle.lock().await;
+        self.force_stop_locked().await;
+    }
 
+    async fn force_stop_locked(&self) {
         self.sessions.write().await.clear();
 
-        // Kill the process
-        if let Some(mut process) = self.process.lock().await.take() {
-            let _ = process.kill();
-        }
+        self.stop_process_monitor().await;
 
         // Stop the RPC client
         if let Some(rpc) = self.rpc.lock().await.take() {
             rpc.stop().await;
+        }
+
+        // Kill the process after marking pending requests as intentional shutdown.
+        if let Some(mut process) = self.process.lock().await.take() {
+            let _ = process.kill();
+            let _ = process.wait().await;
         }
 
         *self.state.write().await = ConnectionState::Disconnected;
@@ -1781,22 +1810,28 @@ impl Client {
         let mut attempt = 0;
 
         loop {
-            let result = {
-                let rpc = self.rpc.lock().await;
-                let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
-                rpc.invoke(method, params.clone()).await
-            };
+            let rpc = self
+                .rpc
+                .lock()
+                .await
+                .clone()
+                .ok_or(CopilotError::NotConnected)?;
+            let result = rpc.invoke(method, params.clone()).await;
 
             match result {
                 Ok(v) => return Ok(v),
                 Err(e) => {
+                    let e = self.with_process_exit(e).await;
                     if attempt == 0
-                        && *self.state.read().await == ConnectionState::Connected
+                        && matches!(
+                            *self.state.read().await,
+                            ConnectionState::Connected | ConnectionState::Error
+                        )
                         && self.options.auto_restart
                         && self.should_restart_on_error(&e)
                     {
                         attempt += 1;
-                        self.restart().await?;
+                        self.restart_if_current(&rpc).await?;
                         continue;
                     }
                     return Err(e);
@@ -1812,7 +1847,8 @@ impl Client {
 
     /// Ensure client is connected.
     async fn ensure_connected(&self) -> Result<()> {
-        match *self.state.read().await {
+        let state = *self.state.read().await;
+        match state {
             ConnectionState::Connected => Ok(()),
             ConnectionState::Disconnected => {
                 if self.options.auto_start {
@@ -1825,7 +1861,7 @@ impl Client {
                 if self.options.auto_restart {
                     self.restart().await
                 } else {
-                    Err(CopilotError::NotConnected)
+                    Err(self.with_process_exit(CopilotError::NotConnected).await)
                 }
             }
             ConnectionState::Connecting => Err(CopilotError::NotConnected),
@@ -1833,18 +1869,84 @@ impl Client {
     }
 
     fn should_restart_on_error(&self, err: &CopilotError) -> bool {
-        match err {
-            CopilotError::ConnectionClosed | CopilotError::NotConnected => true,
-            CopilotError::Transport(_) => true,
-            CopilotError::ProcessExit(_) => true,
-            CopilotError::JsonRpc { code, .. } => *code == -32801,
-            _ => false,
+        matches!(
+            err,
+            CopilotError::ConnectionClosed
+                | CopilotError::NotConnected
+                | CopilotError::Transport(_)
+                | CopilotError::ProcessExit(_)
+        )
+    }
+
+    async fn with_process_exit(&self, error: CopilotError) -> CopilotError {
+        if matches!(
+            error,
+            CopilotError::ConnectionClosed | CopilotError::NotConnected
+        ) {
+            if let Some(code) = *self.process_exit.read().await {
+                return CopilotError::ProcessExit(code);
+            }
+        }
+        error
+    }
+
+    async fn stop_process_monitor(&self) {
+        if let Some(monitor) = self.process_monitor.lock().await.take() {
+            monitor.abort();
+            // Wait for the cancelled child wait to release the process lock.
+            let _ = monitor.await;
         }
     }
 
+    async fn monitor_process(&self, rpc: Arc<RpcClient>) {
+        let process = Arc::clone(&self.process);
+        let process_exit = Arc::clone(&self.process_exit);
+        let state = Arc::clone(&self.state);
+        let monitor = tokio::spawn(async move {
+            let result = {
+                let mut process = process.lock().await;
+                let Some(process) = process.as_mut() else {
+                    return;
+                };
+                process.wait_for_exit().await
+            };
+            let mut state = state.write().await;
+            match result {
+                Ok(code) => {
+                    *process_exit.write().await = Some(code);
+                    tracing::warn!(error = %CopilotError::ProcessExit(code), "Copilot CLI disconnected");
+                }
+                Err(_) => {
+                    tracing::warn!("Failed to wait for Copilot CLI process");
+                }
+            }
+            *state = ConnectionState::Error;
+            drop(state);
+            rpc.disconnect().await;
+        });
+        *self.process_monitor.lock().await = Some(monitor);
+    }
+
     async fn restart(&self) -> Result<()> {
-        self.force_stop().await;
-        self.start().await
+        let _guard = self.lifecycle.lock().await;
+        if *self.state.read().await == ConnectionState::Connected {
+            return Ok(());
+        }
+        self.force_stop_locked().await;
+        self.start_locked().await
+    }
+
+    async fn restart_if_current(&self, failed_rpc: &Arc<RpcClient>) -> Result<()> {
+        let _guard = self.lifecycle.lock().await;
+        let current = self.rpc.lock().await.clone();
+        if current
+            .as_ref()
+            .is_some_and(|rpc| Arc::ptr_eq(rpc, failed_rpc))
+        {
+            self.force_stop_locked().await;
+            self.start_locked().await?;
+        }
+        Ok(())
     }
 
     /// Start the CLI server process.
@@ -1852,7 +1954,7 @@ impl Client {
         if self.options.connection_kind == ConnectionKind::ParentProcess {
             let rpc = JsonRpcClient::new(ParentStdioTransport::new());
             rpc.start().await?;
-            *self.rpc.lock().await = Some(RpcClient::ParentStdio(rpc));
+            *self.rpc.lock().await = Some(Arc::new(RpcClient::ParentStdio(rpc)));
             return Ok(());
         }
 
@@ -1863,7 +1965,7 @@ impl Client {
             let rpc = TcpJsonRpcClient::connect(addr).await?;
             rpc.start().await?;
 
-            *self.rpc.lock().await = Some(RpcClient::Tcp(rpc));
+            *self.rpc.lock().await = Some(Arc::new(RpcClient::Tcp(rpc)));
             return Ok(());
         }
 
@@ -2020,7 +2122,13 @@ impl Client {
                 CopilotError::InvalidConfig("Failed to capture stdout for port detection".into())
             })?;
 
-            let detected_port = detect_tcp_port_from_stdout(stdout).await?;
+            let detected_port = tokio::select! {
+                biased;
+                status = process.wait_for_exit() => {
+                    return Err(CopilotError::ProcessExit(status?));
+                }
+                port = detect_tcp_port_from_stdout(stdout) => port?,
+            };
             let addr = format!("127.0.0.1:{}", detected_port);
             let rpc = TcpJsonRpcClient::connect(addr).await?;
             rpc.start().await?;
@@ -2028,7 +2136,9 @@ impl Client {
         };
 
         *self.process.lock().await = Some(process);
-        *self.rpc.lock().await = Some(rpc);
+        let rpc = Arc::new(rpc);
+        *self.rpc.lock().await = Some(Arc::clone(&rpc));
+        self.monitor_process(rpc).await;
 
         Ok(())
     }
@@ -2038,7 +2148,7 @@ impl Client {
     async fn verify_protocol_version(&self) -> Result<()> {
         // NOTE: We call the underlying RPC directly instead of ping() because ping() calls
         // ensure_connected(), but we haven't set state to Connected yet.
-        let rpc = self.rpc.lock().await;
+        let rpc = self.rpc.lock().await.clone();
         let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
         let result = rpc
             .invoke("ping", Some(serde_json::json!({ "message": null })))
@@ -2079,7 +2189,7 @@ impl Client {
 
     /// Set up notification and request handlers.
     async fn setup_handlers(&self) -> Result<()> {
-        let rpc = self.rpc.lock().await;
+        let rpc = self.rpc.lock().await.clone();
         let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
 
         // Clone Arc references for the handlers
@@ -2179,13 +2289,21 @@ impl Client {
             let method = method.to_string();
 
             Box::pin(async move {
-                let rpc = rpc.lock().await;
+                let rpc = rpc.lock().await.clone();
                 let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
                 rpc.invoke(&method, params).await
             }) as crate::session::InvokeFuture
         };
 
         Arc::new(Session::new(session_id, workspace_path, invoke_fn))
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        if let Some(monitor) = self.process_monitor.get_mut().take() {
+            monitor.abort();
+        }
     }
 }
 
@@ -2564,6 +2682,158 @@ mod tests {
     async fn test_client_state_initial() {
         let client = Client::new(ClientOptions::default()).unwrap();
         assert_eq!(client.state().await, ConnectionState::Disconnected);
+    }
+
+    #[cfg(unix)]
+    async fn monitored_test_client(
+        command: &str,
+    ) -> (
+        Arc<Client>,
+        tokio::net::TcpStream,
+        crate::transport::StdioTransport,
+    ) {
+        let mut process =
+            CopilotProcess::spawn("/bin/sh", &["-c", command], ProcessOptions::new()).unwrap();
+        let transport = process.take_transport().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let rpc = Arc::new(RpcClient::Tcp(TcpJsonRpcClient::new(stream)));
+        if let RpcClient::Tcp(rpc) = rpc.as_ref() {
+            rpc.start().await.unwrap();
+        }
+        let client = Arc::new(
+            Client::new(ClientOptions {
+                auto_start: false,
+                auto_restart: false,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        *client.state.write().await = ConnectionState::Connected;
+        *client.process.lock().await = Some(process);
+        *client.rpc.lock().await = Some(Arc::clone(&rpc));
+        client.monitor_process(rpc).await;
+        (client, server, transport)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_process_exit_disconnects_even_when_transport_stays_open() {
+        use crate::transport::{MessageReader, Transport};
+
+        for (command, expected_code) in [
+            ("read line; exit 23", Some(23)),
+            ("read line; exit 0", Some(0)),
+            ("read line; kill -TERM $$", None),
+        ] {
+            let (client, server, mut control) = monitored_test_client(command).await;
+            let rpc = client.rpc.lock().await.clone().unwrap();
+            let request = tokio::spawn(async move { rpc.invoke("pending", None).await });
+            let mut reader = MessageReader::new(server);
+            reader.read_message().await.unwrap();
+
+            control.write(b"exit\n").await.unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("process monitor must disconnect without transport EOF")
+                .unwrap()
+                .unwrap_err();
+            assert!(matches!(error, CopilotError::ConnectionClosed));
+            assert_eq!(client.state().await, ConnectionState::Error);
+            assert!(matches!(
+                client.ping(None).await,
+                Err(CopilotError::ProcessExit(code)) if code == expected_code
+            ));
+            client.force_stop().await;
+            assert_eq!(client.state().await, ConnectionState::Disconnected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_process_exit_surfaces_to_inflight_client_call() {
+        use crate::transport::{MessageReader, Transport};
+
+        let (client, server, mut control) = monitored_test_client("read line; exit 17").await;
+        let pending_client = Arc::clone(&client);
+        let request = tokio::spawn(async move { pending_client.invoke("pending", None).await });
+        let mut reader = MessageReader::new(server);
+        reader.read_message().await.unwrap();
+        control.write(b"exit\n").await.unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(CopilotError::ProcessExit(Some(17)))
+        ));
+        client.force_stop().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_intentional_stop_does_not_report_process_exit() {
+        use crate::transport::MessageReader;
+
+        for force in [false, true] {
+            let (client, server, _control) = monitored_test_client("read line").await;
+            let pending_client = Arc::clone(&client);
+            let request = tokio::spawn(async move { pending_client.invoke("pending", None).await });
+            let mut reader = MessageReader::new(server);
+            reader.read_message().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                if force {
+                    client.force_stop().await;
+                } else {
+                    assert!(client.stop().await.is_empty());
+                }
+            })
+            .await
+            .expect("shutdown must not wait on an in-flight RPC or child wait");
+            assert!(matches!(
+                request.await.unwrap(),
+                Err(CopilotError::Shutdown)
+            ));
+            assert_eq!(*client.process_exit.read().await, None);
+            assert_eq!(client.state().await, ConnectionState::Disconnected);
+        }
+    }
+
+    #[test]
+    fn test_server_rpc_error_is_not_a_disconnect() {
+        let client = Client::new(ClientOptions::default()).unwrap();
+        assert!(!client.should_restart_on_error(&CopilotError::json_rpc(
+            -32801,
+            "server error",
+            None
+        )));
+        assert!(client.should_restart_on_error(&CopilotError::ConnectionClosed));
+        assert!(client.should_restart_on_error(&CopilotError::ProcessExit(Some(1))));
+        assert!(!client.should_restart_on_error(&CopilotError::Shutdown));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_stale_rpc_failure_does_not_restart_replacement() {
+        let (client, _server, _control) = monitored_test_client("read line").await;
+        let current = client.rpc.lock().await.clone().unwrap();
+        let (previous, _previous_server, _previous_control) =
+            monitored_test_client("read line").await;
+        let stale = previous.rpc.lock().await.clone().unwrap();
+        stale.disconnect().await;
+
+        client.restart_if_current(&stale).await.unwrap();
+        assert!(Arc::ptr_eq(
+            client.rpc.lock().await.as_ref().unwrap(),
+            &current
+        ));
+        assert_eq!(client.state().await, ConnectionState::Connected);
+        assert_eq!(*client.process_exit.read().await, None);
+        client.force_stop().await;
+        previous.force_stop().await;
     }
 
     #[test]

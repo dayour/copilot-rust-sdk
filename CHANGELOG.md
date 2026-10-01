@@ -15,6 +15,12 @@ and this project follows the versioning policy documented in
 ### Fixed
 
 - Preserve raw JSON payloads when known session events fail typed decoding.
+- Normalize RPC transport disconnects to `ConnectionClosed` and explicit stops to
+  `Shutdown`, including pending requests and calls after disconnect. Genuine server
+  JSON-RPC errors are preserved instead of being treated as synthetic disconnects.
+- Monitor owned CLI processes and report `ProcessExit` with the observed exit code,
+  including exits while the transport remains open.
+- Count and log malformed inbound RPC messages without logging their payloads.
 
 ## 3.1.1 - 2026-08-15
 

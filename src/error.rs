@@ -13,7 +13,7 @@ pub enum CopilotError {
     #[error("Transport error: {0}")]
     Transport(#[from] std::io::Error),
 
-    /// Connection was closed unexpectedly
+    /// The RPC transport disconnected unexpectedly (including failed reads/writes).
     #[error("Connection closed")]
     ConnectionClosed,
 
@@ -61,7 +61,10 @@ pub enum CopilotError {
     #[error("Failed to start CLI: {0}")]
     ProcessStart(std::io::Error),
 
-    /// CLI process exited unexpectedly
+    /// An owned CLI process exited unexpectedly; `None` means no exit code is available.
+    ///
+    /// The client reports this once its process monitor observes the exit.
+    /// Transport-level pending requests use [`Self::ConnectionClosed`].
     #[error("CLI exited unexpectedly with code {0:?}")]
     ProcessExit(Option<i32>),
 
@@ -69,7 +72,7 @@ pub enum CopilotError {
     #[error("Failed to detect CLI server port")]
     PortDetectionFailed,
 
-    /// Client is shutting down
+    /// The RPC client was explicitly stopped, rather than accidentally disconnected.
     #[error("Client is shutting down")]
     Shutdown,
 
@@ -151,7 +154,10 @@ mod tests {
     #[test]
     fn test_is_fatal() {
         assert!(CopilotError::ConnectionClosed.is_fatal());
+        assert!(CopilotError::ProcessExit(Some(1)).is_fatal());
+        assert!(CopilotError::ProcessExit(None).is_fatal());
         assert!(CopilotError::Shutdown.is_fatal());
+        assert!(!CopilotError::json_rpc(-32801, "server error", None).is_fatal());
         assert!(!CopilotError::Timeout(Duration::from_secs(30)).is_fatal());
     }
 }

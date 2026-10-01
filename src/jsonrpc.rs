@@ -10,13 +10,14 @@ use crate::transport::{MessageFramer, MessageReader, MessageWriter, StdioTranspo
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, RwLock};
 
 // =============================================================================
 // JSON-RPC 2.0 Message Types
@@ -175,7 +176,187 @@ pub type RequestHandler = Arc<dyn Fn(&str, &Value) -> RequestHandlerFuture + Sen
 // =============================================================================
 
 struct PendingRequest {
-    sender: oneshot::Sender<std::result::Result<Value, JsonRpcError>>,
+    sender: oneshot::Sender<Result<Value>>,
+}
+
+#[derive(Clone, Copy)]
+enum CloseReason {
+    Disconnected,
+    Shutdown,
+}
+
+impl CloseReason {
+    fn error(self) -> CopilotError {
+        match self {
+            Self::Disconnected => CopilotError::ConnectionClosed,
+            Self::Shutdown => CopilotError::Shutdown,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingRequests {
+    requests: HashMap<i64, PendingRequest>,
+    closed: Option<CloseReason>,
+}
+
+struct ConnectionState {
+    running: AtomicBool,
+    pending: Mutex<PendingRequests>,
+    closed: watch::Sender<Option<CloseReason>>,
+    malformed: AtomicU64,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            pending: Mutex::new(PendingRequests::default()),
+            closed: watch::channel(None).0,
+            malformed: AtomicU64::new(0),
+        }
+    }
+
+    async fn start(&self) -> Result<bool> {
+        let pending = self.pending.lock().await;
+        if let Some(reason) = pending.closed {
+            return Err(reason.error());
+        }
+        Ok(!self.running.swap(true, Ordering::SeqCst))
+    }
+
+    async fn close(&self, reason: CloseReason) {
+        // Registration and closure share a lock so no request can miss the drain.
+        let mut pending = self.pending.lock().await;
+        if pending.closed.is_some() {
+            return;
+        }
+        pending.closed = Some(reason);
+        self.running.store(false, Ordering::SeqCst);
+        self.closed.send_replace(Some(reason));
+        for (_, request) in pending.requests.drain() {
+            let _ = request.sender.send(Err(reason.error()));
+        }
+    }
+
+    async fn closed(&self) -> CopilotError {
+        let mut receiver = self.closed.subscribe();
+        loop {
+            if let Some(reason) = *receiver.borrow_and_update() {
+                return reason.error();
+            }
+            // The sender lives at least as long as this borrowed state.
+            let _ = receiver.changed().await;
+        }
+    }
+
+    async fn send(&self, write: impl Future<Output = Result<()>>) -> Result<()> {
+        tokio::select! {
+            biased;
+            error = self.closed() => Err(error),
+            result = write => {
+                if result.is_err() {
+                    self.close(CloseReason::Disconnected).await;
+                    return Err(self.closed().await);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn invoke(
+        &self,
+        id: i64,
+        timeout: Duration,
+        send: impl Future<Output = Result<()>>,
+    ) -> Result<Value> {
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending.lock().await;
+            if let Some(reason) = pending.closed {
+                return Err(reason.error());
+            }
+            pending.requests.insert(id, PendingRequest { sender: tx });
+        }
+
+        if let Err(error) = send.await {
+            self.pending.lock().await.requests.remove(&id);
+            return Err(error);
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => result,
+            outcome => {
+                let mut pending = self.pending.lock().await;
+                pending.requests.remove(&id);
+                Err(match pending.closed {
+                    Some(reason) => reason.error(),
+                    None if outcome.is_err() => CopilotError::Timeout(timeout),
+                    None => CopilotError::ConnectionClosed,
+                })
+            }
+        }
+    }
+
+    async fn respond(&self, response: JsonRpcResponse) {
+        let Some(JsonRpcId::Num(id)) = response.id else {
+            return;
+        };
+        let mut pending = self.pending.lock().await;
+        if let Some(request) = pending.requests.remove(&id) {
+            let result = match response.error {
+                Some(error) => Err(CopilotError::JsonRpc {
+                    code: error.code,
+                    message: error.message,
+                    data: error.data,
+                }),
+                None => Ok(response.result.unwrap_or(Value::Null)),
+            };
+            let _ = request.sender.send(result);
+        }
+    }
+
+    fn malformed(&self, category: &'static str) {
+        self.malformed.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(category, "Discarding malformed JSON-RPC message");
+    }
+
+    fn parse(&self, message: &str) -> Option<Value> {
+        let message: Value = match serde_json::from_str(message) {
+            Ok(message) => message,
+            Err(_) => {
+                self.malformed("json");
+                return None;
+            }
+        };
+        let valid = message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+            && if message.get("method").is_some() {
+                message.get("method").is_some_and(Value::is_string)
+                    && message.get("result").is_none()
+                    && message.get("error").is_none()
+                    && message
+                        .get("params")
+                        .is_none_or(|p| p.is_null() || p.is_object() || p.is_array())
+            } else {
+                message.get("id").is_some_and(|id| !id.is_null())
+                    && (message.get("result").is_some() ^ message.get("error").is_some())
+                    && message.get("error").is_none_or(Value::is_object)
+            };
+        if !valid {
+            self.malformed("envelope");
+            return None;
+        }
+        Some(message)
+    }
+
+    async fn read_failed(&self, error: &CopilotError) {
+        if matches!(error, CopilotError::Protocol(_) | CopilotError::Json(_)) {
+            self.malformed("framing");
+        }
+        // A failed frame may have consumed an unknown number of bytes; do not
+        // attempt to resynchronize, or repeatedly retry a failed IO operation.
+        self.close(CloseReason::Disconnected).await;
+    }
 }
 
 // =============================================================================
@@ -184,8 +365,7 @@ struct PendingRequest {
 
 struct SharedState<T: Transport> {
     framer: Mutex<MessageFramer<T>>,
-    running: AtomicBool,
-    pending_requests: RwLock<HashMap<i64, PendingRequest>>,
+    connection: ConnectionState,
     notification_handler: RwLock<Option<NotificationHandler>>,
     request_handler: RwLock<Option<RequestHandler>>,
 }
@@ -214,8 +394,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         Self {
             state: Arc::new(SharedState {
                 framer: Mutex::new(MessageFramer::new(transport)),
-                running: AtomicBool::new(false),
-                pending_requests: RwLock::new(HashMap::new()),
+                connection: ConnectionState::new(),
                 notification_handler: RwLock::new(None),
                 request_handler: RwLock::new(None),
             }),
@@ -226,10 +405,9 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
     /// Start the background read loop.
     pub async fn start(&self) -> Result<()> {
-        if self.state.running.swap(true, Ordering::SeqCst) {
+        if !self.state.connection.start().await? {
             return Ok(()); // Already running
         }
-
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
@@ -239,7 +417,12 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = shutdown_rx.recv() => {
+                        state.connection.close(CloseReason::Shutdown).await;
+                        break;
+                    }
+                    _ = state.connection.closed() => {
                         break;
                     }
                     result = async {
@@ -248,27 +431,17 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
                     } => {
                         match result {
                             Ok(message_str) => {
-                                if let Ok(message) = serde_json::from_str::<Value>(&message_str) {
-                                    Self::dispatch_message(&state, message).await;
+                                if let Some(message) = state.connection.parse(&message_str) {
+                                    tokio::select! {
+                                        biased;
+                                        _ = state.connection.closed() => break,
+                                        _ = Self::dispatch_message(&state, message) => {}
+                                    }
                                 }
                             }
-                            Err(CopilotError::ConnectionClosed) => {
-                                state.running.store(false, Ordering::SeqCst);
-                                // Fail all pending requests
-                                let mut pending = state.pending_requests.write().await;
-                                for (_, req) in pending.drain() {
-                                    let _ = req.sender.send(Err(JsonRpcError::new(
-                                        -32801,
-                                        "Connection closed",
-                                    )));
-                                }
+                            Err(error) => {
+                                state.connection.read_failed(&error).await;
                                 break;
-                            }
-                            Err(_) => {
-                                // Continue on other errors if still running
-                                if !state.running.load(Ordering::SeqCst) {
-                                    break;
-                                }
                             }
                         }
                     }
@@ -281,25 +454,21 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
     /// Stop the client.
     pub async fn stop(&self) {
-        self.state.running.store(false, Ordering::SeqCst);
+        self.state.connection.close(CloseReason::Shutdown).await;
+    }
 
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.lock().await.take() {
-            let _ = tx.send(()).await;
-        }
-
-        // Fail all pending requests
-        let mut pending = self.state.pending_requests.write().await;
-        for (_, req) in pending.drain() {
-            let _ = req
-                .sender
-                .send(Err(JsonRpcError::new(-32801, "Connection closed")));
-        }
+    pub(crate) async fn disconnect(&self) {
+        self.state.connection.close(CloseReason::Disconnected).await;
     }
 
     /// Check if client is running.
     pub fn is_running(&self) -> bool {
-        self.state.running.load(Ordering::SeqCst)
+        self.state.connection.running.load(Ordering::SeqCst)
+    }
+
+    /// Number of malformed inbound messages or frames observed by this client.
+    pub fn malformed_message_count(&self) -> u64 {
+        self.state.connection.malformed.load(Ordering::Relaxed)
     }
 
     /// Set handler for incoming notifications.
@@ -333,44 +502,12 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
     ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        // Create response channel
-        let (tx, rx) = oneshot::channel();
-
-        // Register pending request
-        {
-            let mut pending = self.state.pending_requests.write().await;
-            pending.insert(id, PendingRequest { sender: tx });
-        }
-
-        // Build and send request
         let request = JsonRpcRequest::new(method, params, Some(JsonRpcId::Num(id)));
         let request_json = serde_json::to_string(&request)?;
-
-        if let Err(e) = self.send_raw(&request_json).await {
-            // Remove pending request on send failure
-            self.state.pending_requests.write().await.remove(&id);
-            return Err(e);
-        }
-
-        // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(rpc_error))) => Err(CopilotError::JsonRpc {
-                code: rpc_error.code,
-                message: rpc_error.message,
-                data: rpc_error.data,
-            }),
-            Ok(Err(_)) => {
-                // Channel closed
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::ConnectionClosed)
-            }
-            Err(_) => {
-                // Timeout
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::Timeout(timeout))
-            }
-        }
+        self.state
+            .connection
+            .invoke(id, timeout, self.send_raw(&request_json))
+            .await
     }
 
     /// Send a notification (no response expected).
@@ -396,8 +533,13 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
     /// Send a raw JSON-RPC message.
     async fn send_raw(&self, message: &str) -> Result<()> {
-        let mut framer = self.state.framer.lock().await;
-        framer.write_message(message).await
+        self.state
+            .connection
+            .send(async {
+                let mut framer = self.state.framer.lock().await;
+                framer.write_message(message).await
+            })
+            .await
     }
 
     /// Dispatch an incoming message.
@@ -420,6 +562,8 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
                 } else {
                     Self::handle_request(state, &request).await;
                 }
+            } else {
+                state.connection.malformed("request");
             }
         }
     }
@@ -429,29 +573,12 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         // Parse response
         let response: JsonRpcResponse = match serde_json::from_value(message) {
             Ok(r) => r,
-            Err(_) => return,
+            Err(_) => {
+                state.connection.malformed("response");
+                return;
+            }
         };
-
-        // Get the ID as i64
-        let id = match &response.id {
-            Some(JsonRpcId::Num(n)) => *n,
-            _ => return, // We only use numeric IDs for outgoing requests
-        };
-
-        // Find and remove pending request
-        let pending_req = {
-            let mut pending = state.pending_requests.write().await;
-            pending.remove(&id)
-        };
-
-        if let Some(req) = pending_req {
-            let result = if let Some(error) = response.error {
-                Err(error)
-            } else {
-                Ok(response.result.unwrap_or(Value::Null))
-            };
-            let _ = req.sender.send(result);
-        }
+        state.connection.respond(response).await;
     }
 
     /// Handle an incoming notification.
@@ -492,8 +619,13 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
         // Send response
         if let Ok(response_json) = serde_json::to_string(&response) {
-            let mut framer = state.framer.lock().await;
-            let _ = framer.write_message(&response_json).await;
+            let _ = state
+                .connection
+                .send(async {
+                    let mut framer = state.framer.lock().await;
+                    framer.write_message(&response_json).await
+                })
+                .await;
         }
     }
 }
@@ -505,8 +637,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 /// Shared state for the Stdio JSON-RPC client.
 struct StdioSharedState {
     writer: Mutex<MessageWriter<tokio::process::ChildStdin>>,
-    running: AtomicBool,
-    pending_requests: RwLock<HashMap<i64, PendingRequest>>,
+    connection: ConnectionState,
     notification_handler: RwLock<Option<NotificationHandler>>,
     request_handler: RwLock<Option<RequestHandler>>,
 }
@@ -529,8 +660,7 @@ impl StdioJsonRpcClient {
         Self {
             state: Arc::new(StdioSharedState {
                 writer: Mutex::new(MessageWriter::new(writer)),
-                running: AtomicBool::new(false),
-                pending_requests: RwLock::new(HashMap::new()),
+                connection: ConnectionState::new(),
                 notification_handler: RwLock::new(None),
                 request_handler: RwLock::new(None),
             }),
@@ -553,10 +683,9 @@ impl StdioJsonRpcClient {
         &self,
         mut reader: MessageReader<tokio::process::ChildStdout>,
     ) -> Result<()> {
-        if self.state.running.swap(true, Ordering::SeqCst) {
+        if !self.state.connection.start().await? {
             return Ok(()); // Already running
         }
-
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
@@ -566,33 +695,28 @@ impl StdioJsonRpcClient {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = shutdown_rx.recv() => {
+                        state.connection.close(CloseReason::Shutdown).await;
+                        break;
+                    }
+                    _ = state.connection.closed() => {
                         break;
                     }
                     result = reader.read_message() => {
                         match result {
                             Ok(message_str) => {
-                                if let Ok(message) = serde_json::from_str::<Value>(&message_str) {
-                                    Self::dispatch_message(&state, message).await;
+                                if let Some(message) = state.connection.parse(&message_str) {
+                                    tokio::select! {
+                                        biased;
+                                        _ = state.connection.closed() => break,
+                                        _ = Self::dispatch_message(&state, message) => {}
+                                    }
                                 }
                             }
-                            Err(CopilotError::ConnectionClosed) => {
-                                state.running.store(false, Ordering::SeqCst);
-                                // Fail all pending requests
-                                let mut pending = state.pending_requests.write().await;
-                                for (_, req) in pending.drain() {
-                                    let _ = req.sender.send(Err(JsonRpcError::new(
-                                        -32801,
-                                        "Connection closed",
-                                    )));
-                                }
+                            Err(error) => {
+                                state.connection.read_failed(&error).await;
                                 break;
-                            }
-                            Err(_) => {
-                                // Continue on other errors if still running
-                                if !state.running.load(Ordering::SeqCst) {
-                                    break;
-                                }
                             }
                         }
                     }
@@ -605,25 +729,21 @@ impl StdioJsonRpcClient {
 
     /// Stop the client.
     pub async fn stop(&self) {
-        self.state.running.store(false, Ordering::SeqCst);
+        self.state.connection.close(CloseReason::Shutdown).await;
+    }
 
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.lock().await.take() {
-            let _ = tx.send(()).await;
-        }
-
-        // Fail all pending requests
-        let mut pending = self.state.pending_requests.write().await;
-        for (_, req) in pending.drain() {
-            let _ = req
-                .sender
-                .send(Err(JsonRpcError::new(-32801, "Connection closed")));
-        }
+    pub(crate) async fn disconnect(&self) {
+        self.state.connection.close(CloseReason::Disconnected).await;
     }
 
     /// Check if client is running.
     pub fn is_running(&self) -> bool {
-        self.state.running.load(Ordering::SeqCst)
+        self.state.connection.running.load(Ordering::SeqCst)
+    }
+
+    /// Number of malformed inbound messages or frames observed by this client.
+    pub fn malformed_message_count(&self) -> u64 {
+        self.state.connection.malformed.load(Ordering::Relaxed)
     }
 
     /// Set handler for incoming notifications.
@@ -657,44 +777,12 @@ impl StdioJsonRpcClient {
     ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        // Create response channel
-        let (tx, rx) = oneshot::channel();
-
-        // Register pending request
-        {
-            let mut pending = self.state.pending_requests.write().await;
-            pending.insert(id, PendingRequest { sender: tx });
-        }
-
-        // Build and send request
         let request = JsonRpcRequest::new(method, params, Some(JsonRpcId::Num(id)));
         let request_json = serde_json::to_string(&request)?;
-
-        if let Err(e) = self.send_raw(&request_json).await {
-            // Remove pending request on send failure
-            self.state.pending_requests.write().await.remove(&id);
-            return Err(e);
-        }
-
-        // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(rpc_error))) => Err(CopilotError::JsonRpc {
-                code: rpc_error.code,
-                message: rpc_error.message,
-                data: rpc_error.data,
-            }),
-            Ok(Err(_)) => {
-                // Channel closed
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::ConnectionClosed)
-            }
-            Err(_) => {
-                // Timeout
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::Timeout(timeout))
-            }
-        }
+        self.state
+            .connection
+            .invoke(id, timeout, self.send_raw(&request_json))
+            .await
     }
 
     /// Send a notification (no response expected).
@@ -706,8 +794,13 @@ impl StdioJsonRpcClient {
 
     /// Send a raw JSON-RPC message.
     async fn send_raw(&self, message: &str) -> Result<()> {
-        let mut writer = self.state.writer.lock().await;
-        writer.write_message(message).await
+        self.state
+            .connection
+            .send(async {
+                let mut writer = self.state.writer.lock().await;
+                writer.write_message(message).await
+            })
+            .await
     }
 
     /// Dispatch an incoming message.
@@ -730,6 +823,8 @@ impl StdioJsonRpcClient {
                 } else {
                     Self::handle_request(state, &request).await;
                 }
+            } else {
+                state.connection.malformed("request");
             }
         }
     }
@@ -739,29 +834,12 @@ impl StdioJsonRpcClient {
         // Parse response
         let response: JsonRpcResponse = match serde_json::from_value(message) {
             Ok(r) => r,
-            Err(_) => return,
+            Err(_) => {
+                state.connection.malformed("response");
+                return;
+            }
         };
-
-        // Get the ID as i64
-        let id = match &response.id {
-            Some(JsonRpcId::Num(n)) => *n,
-            _ => return,
-        };
-
-        // Find and remove pending request
-        let pending_req = {
-            let mut pending = state.pending_requests.write().await;
-            pending.remove(&id)
-        };
-
-        if let Some(req) = pending_req {
-            let result = if let Some(error) = response.error {
-                Err(error)
-            } else {
-                Ok(response.result.unwrap_or(Value::Null))
-            };
-            let _ = req.sender.send(result);
-        }
+        state.connection.respond(response).await;
     }
 
     /// Handle an incoming notification.
@@ -801,8 +879,13 @@ impl StdioJsonRpcClient {
 
         // Send response
         if let Ok(response_json) = serde_json::to_string(&response) {
-            let mut writer = state.writer.lock().await;
-            let _ = writer.write_message(&response_json).await;
+            let _ = state
+                .connection
+                .send(async {
+                    let mut writer = state.writer.lock().await;
+                    writer.write_message(&response_json).await
+                })
+                .await;
         }
     }
 }
@@ -814,8 +897,7 @@ impl StdioJsonRpcClient {
 /// Shared state for the TCP JSON-RPC client.
 struct TcpSharedState {
     writer: Mutex<MessageWriter<OwnedWriteHalf>>,
-    running: AtomicBool,
-    pending_requests: RwLock<HashMap<i64, PendingRequest>>,
+    connection: ConnectionState,
     notification_handler: RwLock<Option<NotificationHandler>>,
     request_handler: RwLock<Option<RequestHandler>>,
 }
@@ -843,8 +925,7 @@ impl TcpJsonRpcClient {
         Self {
             state: Arc::new(TcpSharedState {
                 writer: Mutex::new(MessageWriter::new(writer)),
-                running: AtomicBool::new(false),
-                pending_requests: RwLock::new(HashMap::new()),
+                connection: ConnectionState::new(),
                 notification_handler: RwLock::new(None),
                 request_handler: RwLock::new(None),
             }),
@@ -863,10 +944,9 @@ impl TcpJsonRpcClient {
     }
 
     async fn start_with_reader(&self, mut reader: MessageReader<OwnedReadHalf>) -> Result<()> {
-        if self.state.running.swap(true, Ordering::SeqCst) {
+        if !self.state.connection.start().await? {
             return Ok(()); // Already running
         }
-
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
@@ -875,31 +955,28 @@ impl TcpJsonRpcClient {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = shutdown_rx.recv() => {
+                        state.connection.close(CloseReason::Shutdown).await;
+                        break;
+                    }
+                    _ = state.connection.closed() => {
                         break;
                     }
                     result = reader.read_message() => {
                         match result {
                             Ok(message_str) => {
-                                if let Ok(message) = serde_json::from_str::<Value>(&message_str) {
-                                    Self::dispatch_message(&state, message).await;
+                                if let Some(message) = state.connection.parse(&message_str) {
+                                    tokio::select! {
+                                        biased;
+                                        _ = state.connection.closed() => break,
+                                        _ = Self::dispatch_message(&state, message) => {}
+                                    }
                                 }
                             }
-                            Err(CopilotError::ConnectionClosed) => {
-                                state.running.store(false, Ordering::SeqCst);
-                                let mut pending = state.pending_requests.write().await;
-                                for (_, req) in pending.drain() {
-                                    let _ = req.sender.send(Err(JsonRpcError::new(
-                                        -32801,
-                                        "Connection closed",
-                                    )));
-                                }
+                            Err(error) => {
+                                state.connection.read_failed(&error).await;
                                 break;
-                            }
-                            Err(_) => {
-                                if !state.running.load(Ordering::SeqCst) {
-                                    break;
-                                }
                             }
                         }
                     }
@@ -912,23 +989,21 @@ impl TcpJsonRpcClient {
 
     /// Stop the client.
     pub async fn stop(&self) {
-        self.state.running.store(false, Ordering::SeqCst);
+        self.state.connection.close(CloseReason::Shutdown).await;
+    }
 
-        if let Some(tx) = self.shutdown_tx.lock().await.take() {
-            let _ = tx.send(()).await;
-        }
-
-        let mut pending = self.state.pending_requests.write().await;
-        for (_, req) in pending.drain() {
-            let _ = req
-                .sender
-                .send(Err(JsonRpcError::new(-32801, "Connection closed")));
-        }
+    pub(crate) async fn disconnect(&self) {
+        self.state.connection.close(CloseReason::Disconnected).await;
     }
 
     /// Check if client is running.
     pub fn is_running(&self) -> bool {
-        self.state.running.load(Ordering::SeqCst)
+        self.state.connection.running.load(Ordering::SeqCst)
+    }
+
+    /// Number of malformed inbound messages or frames observed by this client.
+    pub fn malformed_message_count(&self) -> u64 {
+        self.state.connection.malformed.load(Ordering::Relaxed)
     }
 
     /// Set handler for incoming notifications.
@@ -962,36 +1037,12 @@ impl TcpJsonRpcClient {
     ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = self.state.pending_requests.write().await;
-            pending.insert(id, PendingRequest { sender: tx });
-        }
-
         let request = JsonRpcRequest::new(method, params, Some(JsonRpcId::Num(id)));
         let request_json = serde_json::to_string(&request)?;
-
-        if let Err(e) = self.send_raw(&request_json).await {
-            self.state.pending_requests.write().await.remove(&id);
-            return Err(e);
-        }
-
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(rpc_error))) => Err(CopilotError::JsonRpc {
-                code: rpc_error.code,
-                message: rpc_error.message,
-                data: rpc_error.data,
-            }),
-            Ok(Err(_)) => {
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::ConnectionClosed)
-            }
-            Err(_) => {
-                self.state.pending_requests.write().await.remove(&id);
-                Err(CopilotError::Timeout(timeout))
-            }
-        }
+        self.state
+            .connection
+            .invoke(id, timeout, self.send_raw(&request_json))
+            .await
     }
 
     /// Send a notification (no response expected).
@@ -1002,8 +1053,13 @@ impl TcpJsonRpcClient {
     }
 
     async fn send_raw(&self, message: &str) -> Result<()> {
-        let mut writer = self.state.writer.lock().await;
-        writer.write_message(message).await
+        self.state
+            .connection
+            .send(async {
+                let mut writer = self.state.writer.lock().await;
+                writer.write_message(message).await
+            })
+            .await
     }
 
     async fn dispatch_message(state: &TcpSharedState, message: Value) {
@@ -1023,6 +1079,8 @@ impl TcpJsonRpcClient {
                 } else {
                     Self::handle_request(state, &request).await;
                 }
+            } else {
+                state.connection.malformed("request");
             }
         }
     }
@@ -1030,27 +1088,12 @@ impl TcpJsonRpcClient {
     async fn handle_response(state: &TcpSharedState, message: Value) {
         let response: JsonRpcResponse = match serde_json::from_value(message) {
             Ok(r) => r,
-            Err(_) => return,
+            Err(_) => {
+                state.connection.malformed("response");
+                return;
+            }
         };
-
-        let id = match &response.id {
-            Some(JsonRpcId::Num(n)) => *n,
-            _ => return,
-        };
-
-        let pending_req = {
-            let mut pending = state.pending_requests.write().await;
-            pending.remove(&id)
-        };
-
-        if let Some(req) = pending_req {
-            let result = if let Some(error) = response.error {
-                Err(error)
-            } else {
-                Ok(response.result.unwrap_or(Value::Null))
-            };
-            let _ = req.sender.send(result);
-        }
+        state.connection.respond(response).await;
     }
 
     async fn handle_notification(state: &TcpSharedState, request: &JsonRpcRequest) {
@@ -1086,8 +1129,13 @@ impl TcpJsonRpcClient {
         };
 
         if let Ok(response_json) = serde_json::to_string(&response) {
-            let mut writer = state.writer.lock().await;
-            let _ = writer.write_message(&response_json).await;
+            let _ = state
+                .connection
+                .send(async {
+                    let mut writer = state.writer.lock().await;
+                    writer.write_message(&response_json).await
+                })
+                .await;
         }
     }
 }
@@ -1097,6 +1145,75 @@ mod tests {
     use super::*;
     use crate::transport::MemoryTransport;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn disconnect_cancels_sends_waiting_for_framer() {
+        let client = JsonRpcClient::new(MemoryTransport::new(Vec::new()));
+        let _framer = client.state.framer.lock().await;
+        let request = client.invoke("ping", None);
+        let notification = client.notify("ping", None);
+        tokio::pin!(request, notification);
+        assert!(futures::poll!(&mut request).is_pending());
+        assert!(futures::poll!(&mut notification).is_pending());
+        client.disconnect().await;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), request)
+                .await
+                .unwrap(),
+            Err(CopilotError::ConnectionClosed)
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), notification)
+                .await
+                .unwrap(),
+            Err(CopilotError::ConnectionClosed)
+        ));
+        assert!(client
+            .state
+            .connection
+            .pending
+            .lock()
+            .await
+            .requests
+            .is_empty());
+        assert!(matches!(
+            client.start().await,
+            Err(CopilotError::ConnectionClosed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn disconnected_request_cannot_become_timeout() {
+        for reason in [CloseReason::Disconnected, CloseReason::Shutdown] {
+            let connection = ConnectionState::new();
+            let request = connection.invoke(1, Duration::from_millis(10), async { Ok(()) });
+            tokio::pin!(request);
+            assert!(futures::poll!(&mut request).is_pending());
+            connection.close(reason).await;
+            // Even if the timeout is ready when the caller resumes, closure wins.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let error = request.await.unwrap_err();
+            match reason {
+                CloseReason::Disconnected => {
+                    assert!(matches!(error, CopilotError::ConnectionClosed))
+                }
+                CloseReason::Shutdown => assert!(matches!(error, CopilotError::Shutdown)),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn first_terminal_reason_wins() {
+        let connection = ConnectionState::new();
+        connection.close(CloseReason::Shutdown).await;
+        connection.close(CloseReason::Disconnected).await;
+        assert!(matches!(connection.closed().await, CopilotError::Shutdown));
+        assert!(matches!(
+            connection.invoke(1, Duration::ZERO, async { Ok(()) }).await,
+            Err(CopilotError::Shutdown)
+        ));
+        assert!(connection.pending.lock().await.requests.is_empty());
+    }
 
     #[test]
     fn test_json_rpc_request_serialization() {
