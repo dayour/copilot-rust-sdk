@@ -751,13 +751,7 @@ async fn test_multiple_tools() {
                     "add" => a + b,
                     "subtract" => a - b,
                     "multiply" => a * b,
-                    "divide" => {
-                        if b != 0.0 {
-                            a / b
-                        } else {
-                            0.0
-                        }
-                    }
+                    "divide" if b != 0.0 => a / b,
                     _ => 0.0,
                 };
 

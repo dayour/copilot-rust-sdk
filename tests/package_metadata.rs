@@ -34,3 +34,33 @@ fn ci_docs_build_matches_docs_rs_features() {
         "CI docs step should build docs with all features"
     );
 }
+
+#[test]
+fn msrv_and_ci_match_pinned_toolchain() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let toolchain = fs::read_to_string(root.join("rust-toolchain.toml")).expect("read toolchain");
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+    let policy = fs::read_to_string(root.join("docs/msrv-policy.md")).expect("read MSRV policy");
+
+    assert!(toolchain.contains(r#"channel = "1.99.0""#));
+    assert!(manifest.contains(r#"rust-version = "1.99.0""#));
+    assert!(manifest.contains(r#"edition = "2021""#));
+    assert!(policy.contains("The minimum supported Rust version (MSRV) is Rust 1.99.0."));
+
+    let workflow = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI");
+    let workflow: serde_yaml::Value = serde_yaml::from_str(&workflow).expect("parse CI");
+    for job in ["test", "parity"] {
+        let steps = workflow["jobs"][job]["steps"]
+            .as_sequence()
+            .expect("job steps");
+        let install = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("Install Rust toolchain"))
+            .expect("toolchain installation step");
+        assert_eq!(
+            install["with"]["toolchain"].as_str(),
+            Some("1.99.0"),
+            "{job} must use the pinned toolchain"
+        );
+    }
+}
