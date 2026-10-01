@@ -36,6 +36,7 @@ pub const MIN_PROTOCOL_VERSION: u32 = 2;
 
 /// Connection state of the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ConnectionState {
     #[default]
     Disconnected,
@@ -47,6 +48,7 @@ pub enum ConnectionState {
 /// System message mode for session configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SystemMessageMode {
     Append,
     Replace,
@@ -56,6 +58,7 @@ pub enum SystemMessageMode {
 /// Attachment type for user messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum AttachmentType {
     File,
     Directory,
@@ -66,6 +69,7 @@ pub enum AttachmentType {
 
 /// Log level for the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum LogLevel {
     None,
     Debug,
@@ -108,6 +112,7 @@ pub struct ToolBinaryResult {
 /// Icon theme variant for an external resource link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ExternalToolTextResultForLlmContentResourceLinkIconTheme {
     /// Icon intended for light themes.
     Light,
@@ -161,6 +166,7 @@ pub struct EmbeddedBlobResourceContents {
 /// Embedded resource contents, either inline text or inline binary data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ExternalToolTextResultForLlmContentResourceDetails {
     /// Embedded text resource contents.
     Text(EmbeddedTextResourceContents),
@@ -171,6 +177,7 @@ pub enum ExternalToolTextResultForLlmContentResourceDetails {
 /// A tool-result content block for LLM-visible output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExternalToolTextResultForLlmContent {
     /// Plain text content block.
     Text {
@@ -420,6 +427,7 @@ pub fn default_join_session_permission_handler(
 /// corresponds to a distinct part of the system prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SystemMessageSection {
     /// Agent identity preamble and mode statement.
     Identity,
@@ -525,6 +533,7 @@ pub fn system_message_sections() -> Vec<(SystemMessageSection, &'static str)> {
 /// The operation applied to a single system message section in "customize" mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SectionOverrideAction {
     /// Replace section content entirely.
     Replace,
@@ -732,6 +741,7 @@ pub struct LargeToolOutputConfig {
 /// Reasoning summary mode for models with configurable reasoning summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ReasoningSummary {
     /// Do not request reasoning summaries from the model.
     None,
@@ -812,6 +822,7 @@ pub struct DefaultAgentConfig {
 /// Remote session export and steering mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum RemoteSessionMode {
     /// Disable remote session export and steering.
     #[default]
@@ -825,6 +836,7 @@ pub enum RemoteSessionMode {
 /// Where the runtime persists a given class of credentials or caches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum StorageMode {
     /// Persist to disk across sessions.
     #[default]
@@ -1282,6 +1294,7 @@ pub struct CopilotUserResponse {
 /// Auth credential payload accepted by session-auth operations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum AuthInfo {
     /// HMAC-based authentication used by GitHub-internal services.
     Hmac {
@@ -1405,6 +1418,7 @@ fn default_mcp_type() -> String {
 /// MCP server configuration (either local or remote).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum McpServerConfig {
     Local(McpLocalServerConfig),
     Remote(McpRemoteServerConfig),
@@ -1448,6 +1462,7 @@ pub struct SendAttachmentFileLineRange {
 /// Type of GitHub reference attachment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SendAttachmentGithubReferenceType {
     /// GitHub issue reference.
     Issue,
@@ -1478,6 +1493,7 @@ pub struct SendAttachmentSelectionDetails {
 /// A user message attachment payload sent to the runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SendAttachment {
     /// File attachment.
     File {
@@ -2086,6 +2102,7 @@ impl SessionCapabilities {
 /// Elicitation mode: structured form input or browser redirect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ElicitationMode {
     /// Structured form input.
     Form,
@@ -2096,6 +2113,7 @@ pub enum ElicitationMode {
 /// Accepted string-format hints for free-text elicitation fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum UIElicitationSchemaPropertyStringFormat {
     /// Email address string format.
     Email,
@@ -2110,6 +2128,7 @@ pub enum UIElicitationSchemaPropertyStringFormat {
 /// Numeric JSON type accepted by an elicitation field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum UIElicitationSchemaPropertyNumberType {
     /// Any JSON number.
     Number,
@@ -2323,6 +2342,7 @@ pub struct UIElicitationSchemaPropertyNumber {
 /// Schema for a single elicitation form field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum UIElicitationSchemaProperty {
     /// Inline string-enum field.
     StringEnum(UIElicitationStringEnumField),
@@ -2357,6 +2377,7 @@ pub struct UIElicitationSchema {
 /// One submitted UI elicitation field value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum UIElicitationFieldValue {
     /// String field value.
     String(String),
@@ -2509,6 +2530,7 @@ pub struct AutoModeSwitchRequest {
 /// Response to an auto-mode-switch request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AutoModeSwitchResponse {
     /// Allow the switch for this turn only.
     Yes,
@@ -3105,6 +3127,7 @@ impl From<String> for MessageOptions {
 /// Mirrors the Node.js `CopilotClientMode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CopilotClientMode {
     /// Standard mode: the CLI owns the workspace and the local filesystem.
     #[default]
@@ -3118,6 +3141,7 @@ pub enum CopilotClientMode {
 
 /// How a [`Client`](crate::client::Client) connects to the Copilot runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum ConnectionKind {
     /// Spawn (or attach to) a Copilot CLI server and talk to it as a child.
     #[default]
@@ -3334,6 +3358,7 @@ impl Clone for ClientOptions {
 /// Metadata about a session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionMetadata {
     pub session_id: String,
     #[serde(default)]
@@ -3366,6 +3391,7 @@ pub struct SessionMetadata {
 /// Working-directory and repository context recorded for a session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionContext {
     /// Most recent working directory for this session.
     pub cwd: String,
@@ -3386,6 +3412,7 @@ pub struct SessionContext {
 /// Response from a ping request.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PingResponse {
     pub message: String,
     pub timestamp: i64,
@@ -3396,6 +3423,7 @@ pub struct PingResponse {
 /// Response from status.get request.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetStatusResponse {
     pub version: String,
     pub protocol_version: u32,
@@ -3404,6 +3432,7 @@ pub struct GetStatusResponse {
 /// Response from auth.getStatus request.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetAuthStatusResponse {
     pub is_authenticated: bool,
     #[serde(default)]
@@ -3419,6 +3448,7 @@ pub struct GetAuthStatusResponse {
 /// Model capabilities - what the model supports.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelCapabilities {
     #[serde(default)]
     pub supports: ModelSupports,
@@ -3429,6 +3459,7 @@ pub struct ModelCapabilities {
 /// What features a model supports.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelSupports {
     #[serde(default)]
     pub vision: bool,
@@ -3439,6 +3470,7 @@ pub struct ModelSupports {
 /// Vision limits for a model.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelVisionLimits {
     #[serde(default)]
     pub supported_media_types: Vec<String>,
@@ -3451,6 +3483,7 @@ pub struct ModelVisionLimits {
 /// Model limits.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelLimits {
     #[serde(default)]
     pub max_prompt_tokens: Option<u32>,
@@ -3462,6 +3495,7 @@ pub struct ModelLimits {
 
 /// Model policy state.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct ModelPolicy {
     pub state: String,
     #[serde(default)]
@@ -3469,7 +3503,8 @@ pub struct ModelPolicy {
 }
 
 /// Model billing information.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[non_exhaustive]
 pub struct ModelBilling {
     #[serde(default)]
     pub multiplier: f64,
@@ -3479,8 +3514,9 @@ pub struct ModelBilling {
 }
 
 /// Token-level pricing information for a model.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelBillingTokenPrices {
     /// AI Credits cost per billing batch of input tokens.
     #[serde(default)]
@@ -3503,8 +3539,9 @@ pub struct ModelBillingTokenPrices {
 }
 
 /// Long context tier pricing for a model.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelBillingTokenPricesLongContext {
     /// AI Credits cost per billing batch of input tokens.
     #[serde(default)]
@@ -3523,6 +3560,7 @@ pub struct ModelBillingTokenPricesLongContext {
 /// Information about an available model.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -3535,6 +3573,33 @@ pub struct ModelInfo {
     pub supported_reasoning_efforts: Option<Vec<String>>,
     #[serde(default)]
     pub default_reasoning_effort: Option<String>,
+}
+
+impl ModelInfo {
+    /// Create a model entry for a custom model-listing callback.
+    ///
+    /// Set optional metadata and capability fields after construction.
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            capabilities: ModelCapabilities::default(),
+            policy: None,
+            billing: None,
+            supported_reasoning_efforts: None,
+            default_reasoning_effort: None,
+        }
+    }
+}
+
+impl ModelPolicy {
+    /// Create a model policy with no additional terms.
+    pub fn new(state: impl Into<String>) -> Self {
+        Self {
+            state: state.into(),
+            terms: String::new(),
+        }
+    }
 }
 
 // =============================================================================
@@ -3615,6 +3680,7 @@ pub mod session_lifecycle_event_types {
 /// Metadata for session lifecycle events.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionLifecycleEventMetadata {
     #[serde(default)]
     pub start_time: Option<String>,
@@ -3627,6 +3693,7 @@ pub struct SessionLifecycleEventMetadata {
 /// Session lifecycle event notification.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionLifecycleEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -3638,6 +3705,7 @@ pub struct SessionLifecycleEvent {
 /// Response from session.getForeground.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetForegroundSessionResponse {
     #[serde(default)]
     pub session_id: Option<String>,
@@ -3648,6 +3716,7 @@ pub struct GetForegroundSessionResponse {
 /// Response from session.setForeground.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SetForegroundSessionResponse {
     #[serde(default)]
     pub success: bool,
@@ -3679,6 +3748,7 @@ impl std::fmt::Display for StopError {
 /// Session operation mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SessionMode {
     Interactive,
     Plan,
@@ -3710,6 +3780,7 @@ pub struct SetModelOptions {
 /// Log level for session log entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SessionLogLevel {
     Error,
     Info,
@@ -3729,6 +3800,7 @@ pub struct LogOptions {
 /// Result from adding a session log entry.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LogResult {
     pub event_id: String,
 }
@@ -3780,6 +3852,7 @@ pub struct PlanData {
 /// and `session.agent.getCurrent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AgentInfo {
     /// Unique identifier of the custom agent.
     pub name: String,
@@ -3828,6 +3901,7 @@ pub struct AgentInfo {
 /// Where an agent definition was loaded from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum AgentInfoSource {
     /// Loaded from the user's personal agent configuration.
     User,
@@ -3862,6 +3936,7 @@ pub struct FleetStartOptions {
 /// A tool definition as returned by the server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolInfo {
     pub name: String,
     #[serde(default)]
@@ -3873,6 +3948,7 @@ pub struct ToolInfo {
 /// Result from listing available tools.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolsListResult {
     pub tools: Vec<ToolInfo>,
 }
@@ -3884,6 +3960,7 @@ pub struct ToolsListResult {
 /// A snapshot of quota usage.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QuotaSnapshot {
     #[serde(rename = "type")]
     pub quota_type: String,
@@ -3900,6 +3977,7 @@ pub struct QuotaSnapshot {
 /// Result from getting account quota.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QuotaResult {
     pub quotas: Vec<QuotaSnapshot>,
 }
@@ -3910,6 +3988,7 @@ pub struct QuotaResult {
 
 /// Signal to send to a shell process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ShellSignal {
     SIGINT,
     SIGKILL,
@@ -3930,6 +4009,7 @@ pub struct ShellExecOptions {
 /// Result from executing a shell command.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ShellExecResult {
     pub process_id: String,
 }
@@ -3941,6 +4021,7 @@ pub struct ShellExecResult {
 /// Metadata about a workspace file.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WorkspaceFile {
     pub path: String,
     #[serde(default)]
@@ -3971,6 +4052,29 @@ pub struct TelemetryConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_model_construction_helpers() {
+        let model = ModelInfo::new("custom-model", String::from("Custom model"));
+        assert_eq!(model.id, "custom-model");
+        assert_eq!(model.name, "Custom model");
+        assert!(!model.capabilities.supports.vision);
+        assert!(!model.capabilities.supports.reasoning_effort);
+        assert_eq!(model.capabilities.limits.max_context_window_tokens, 0);
+        assert!(model.policy.is_none());
+        assert!(model.billing.is_none());
+        assert!(model.supported_reasoning_efforts.is_none());
+        assert!(model.default_reasoning_effort.is_none());
+
+        let policy = ModelPolicy::new("enabled");
+        assert_eq!(policy.state, "enabled");
+        assert!(policy.terms.is_empty());
+        assert!(ModelBilling::default().token_prices.is_none());
+        assert!(ModelBillingTokenPrices::default().long_context.is_none());
+        assert!(ModelBillingTokenPricesLongContext::default()
+            .context_max
+            .is_none());
+    }
 
     fn assert_type_tag_roundtrip<T>(value: T, expected_tag: &str)
     where

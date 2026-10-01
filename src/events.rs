@@ -16,6 +16,7 @@ use std::collections::HashMap;
 /// Handoff source type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum HandoffSourceType {
     Remote,
     Local,
@@ -24,6 +25,7 @@ pub enum HandoffSourceType {
 /// System message role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SystemMessageRole {
     System,
     Developer,
@@ -32,6 +34,7 @@ pub enum SystemMessageRole {
 /// Repository info for handoff events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RepositoryInfo {
     pub owner: String,
     pub name: String,
@@ -42,6 +45,7 @@ pub struct RepositoryInfo {
 /// Attachment in user message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UserMessageAttachmentItem {
     #[serde(rename = "type")]
     pub attachment_type: super::AttachmentType,
@@ -52,6 +56,7 @@ pub struct UserMessageAttachmentItem {
 /// Tool request in assistant message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolRequestItem {
     pub tool_call_id: String,
     pub name: String,
@@ -61,12 +66,14 @@ pub struct ToolRequestItem {
 
 /// Tool execution result content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolResultContent {
     pub content: String,
 }
 
 /// Tool execution error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolExecutionError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +82,7 @@ pub struct ToolExecutionError {
 
 /// Hook error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HookError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +92,7 @@ pub struct HookError {
 /// System message metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SystemMessageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_version: Option<String>,
@@ -98,6 +107,7 @@ pub struct SystemMessageMetadata {
 /// Data for session.start event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionStartData {
     #[serde(default)]
     pub session_id: String,
@@ -116,6 +126,7 @@ pub struct SessionStartData {
 /// Data for session.resume event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionResumeData {
     pub resume_time: String,
     pub event_count: f64,
@@ -124,6 +135,7 @@ pub struct SessionResumeData {
 /// Data for session.error event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionErrorData {
     pub error_type: String,
     pub message: String,
@@ -137,11 +149,13 @@ pub struct SessionErrorData {
 
 /// Data for session.idle event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionIdleData {}
 
 /// Data for session.info event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionInfoData {
     pub info_type: String,
     pub message: String,
@@ -150,6 +164,7 @@ pub struct SessionInfoData {
 /// Data for session.model_change event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionModelChangeData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_model: Option<String>,
@@ -159,6 +174,7 @@ pub struct SessionModelChangeData {
 /// Data for session.handoff event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionHandoffData {
     pub handoff_time: String,
     pub source_type: HandoffSourceType,
@@ -175,6 +191,7 @@ pub struct SessionHandoffData {
 /// Data for session.truncation event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionTruncationData {
     pub token_limit: f64,
     pub pre_truncation_tokens_in_messages: f64,
@@ -189,6 +206,7 @@ pub struct SessionTruncationData {
 /// Data for user.message event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UserMessageData {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -201,17 +219,20 @@ pub struct UserMessageData {
 
 /// Data for pending_messages.modified event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PendingMessagesModifiedData {}
 
 /// Data for assistant.turn_start event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantTurnStartData {
     pub turn_id: String,
 }
 
 /// Data for assistant.intent event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AssistantIntentData {
     pub intent: String,
 }
@@ -219,6 +240,7 @@ pub struct AssistantIntentData {
 /// Data for assistant.reasoning event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantReasoningData {
     pub reasoning_id: String,
     pub content: String,
@@ -229,6 +251,7 @@ pub struct AssistantReasoningData {
 /// Data for assistant.reasoning_delta event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantReasoningDeltaData {
     pub reasoning_id: String,
     pub delta_content: String,
@@ -237,6 +260,7 @@ pub struct AssistantReasoningDeltaData {
 /// Data for assistant.message event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantMessageData {
     pub message_id: String,
     pub content: String,
@@ -253,6 +277,7 @@ pub struct AssistantMessageData {
 /// Data for assistant.message_delta event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantMessageDeltaData {
     pub message_id: String,
     pub delta_content: String,
@@ -265,6 +290,7 @@ pub struct AssistantMessageDeltaData {
 /// Data for assistant.turn_end event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantTurnEndData {
     pub turn_id: String,
 }
@@ -272,6 +298,7 @@ pub struct AssistantTurnEndData {
 /// Data for assistant.usage event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantUsageData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -299,6 +326,7 @@ pub struct AssistantUsageData {
 
 /// Data for abort event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AbortData {
     pub reason: String,
 }
@@ -306,6 +334,7 @@ pub struct AbortData {
 /// Data for tool.user_requested event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolUserRequestedData {
     pub tool_call_id: String,
     pub tool_name: String,
@@ -316,6 +345,7 @@ pub struct ToolUserRequestedData {
 /// Data for tool.execution_start event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolExecutionStartData {
     pub tool_call_id: String,
     pub tool_name: String,
@@ -328,6 +358,7 @@ pub struct ToolExecutionStartData {
 /// Data for tool.execution_partial_result event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolExecutionPartialResultData {
     pub tool_call_id: String,
     pub partial_output: String,
@@ -336,6 +367,7 @@ pub struct ToolExecutionPartialResultData {
 /// Data for tool.execution_complete event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolExecutionCompleteData {
     pub tool_call_id: String,
     pub success: bool,
@@ -358,6 +390,7 @@ pub struct ToolExecutionCompleteData {
 /// Data for custom_agent.started event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CustomAgentStartedData {
     pub tool_call_id: String,
     pub agent_name: String,
@@ -368,6 +401,7 @@ pub struct CustomAgentStartedData {
 /// Data for custom_agent.completed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CustomAgentCompletedData {
     pub tool_call_id: String,
     pub agent_name: String,
@@ -376,6 +410,7 @@ pub struct CustomAgentCompletedData {
 /// Data for custom_agent.failed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CustomAgentFailedData {
     pub tool_call_id: String,
     pub agent_name: String,
@@ -385,6 +420,7 @@ pub struct CustomAgentFailedData {
 /// Data for custom_agent.selected event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CustomAgentSelectedData {
     pub agent_name: String,
     pub agent_display_name: String,
@@ -394,6 +430,7 @@ pub struct CustomAgentSelectedData {
 /// Data for hook.start event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct HookStartData {
     pub hook_invocation_id: String,
     pub hook_type: String,
@@ -404,6 +441,7 @@ pub struct HookStartData {
 /// Data for hook.end event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct HookEndData {
     pub hook_invocation_id: String,
     pub hook_type: String,
@@ -417,6 +455,7 @@ pub struct HookEndData {
 /// Data for system.message event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SystemMessageEventData {
     pub content: String,
     pub role: SystemMessageRole,
@@ -428,11 +467,13 @@ pub struct SystemMessageEventData {
 
 /// Data for session.compaction_start event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionCompactionStartData {}
 
 /// Tokens used during compaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CompactionTokensUsed {
     #[serde(default)]
     pub input: f64,
@@ -445,6 +486,7 @@ pub struct CompactionTokensUsed {
 /// Data for session.compaction_complete event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionCompactionCompleteData {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -474,6 +516,7 @@ pub struct SessionCompactionCompleteData {
 /// Shutdown type for session.shutdown event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ShutdownType {
     Routine,
     Error,
@@ -482,6 +525,7 @@ pub enum ShutdownType {
 /// Code changes reported in shutdown event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ShutdownCodeChanges {
     #[serde(default)]
     pub lines_added: f64,
@@ -494,6 +538,7 @@ pub struct ShutdownCodeChanges {
 /// Data for session.shutdown event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionShutdownData {
     pub shutdown_type: ShutdownType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -515,6 +560,7 @@ pub struct SessionShutdownData {
 /// Data for session.snapshot_rewind event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionSnapshotRewindData {
     pub up_to_event_id: String,
     #[serde(default)]
@@ -524,6 +570,7 @@ pub struct SessionSnapshotRewindData {
 /// Data for session.usage_info event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionUsageInfoData {
     #[serde(default)]
     pub token_limit: f64,
@@ -536,6 +583,7 @@ pub struct SessionUsageInfoData {
 /// Data for tool.execution_progress event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ToolExecutionProgressData {
     pub tool_call_id: String,
     pub progress_message: String,
@@ -544,6 +592,7 @@ pub struct ToolExecutionProgressData {
 /// Data for skill.invoked event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SkillInvokedData {
     pub name: String,
     pub path: String,
@@ -563,6 +612,7 @@ pub struct SkillInvokedData {
 /// `session.tools.handlePendingToolCall` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ExternalToolRequestedData {
     /// Unique request ID for correlating the response.
     pub request_id: Option<String>,
@@ -581,6 +631,7 @@ pub struct ExternalToolRequestedData {
 /// `session.permissions.handlePendingPermissionRequest` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PermissionRequestedData {
     /// Unique request ID for correlating the response.
     pub request_id: Option<String>,
@@ -594,6 +645,7 @@ pub struct PermissionRequestedData {
 /// the response is sent via `session.ui.handlePendingElicitation` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ElicitationRequestedData {
     /// Unique request ID for correlating the response.
     pub request_id: Option<String>,
@@ -620,6 +672,7 @@ pub struct ElicitationRequestedData {
 /// the response is sent via `session.ui.handlePendingExitPlanMode` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ExitPlanModeRequestedData {
     /// Unique request ID for correlating the response.
     pub request_id: Option<String>,
@@ -643,6 +696,7 @@ pub struct ExitPlanModeRequestedData {
 /// the response is sent via `session.ui.handlePendingAutoModeSwitch` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AutoModeSwitchRequestedData {
     /// Unique request ID for correlating the response.
     pub request_id: Option<String>,
@@ -660,6 +714,7 @@ pub struct AutoModeSwitchRequestedData {
 /// the acknowledgement is sent via `session.commands.handlePendingCommand` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CommandExecuteData {
     /// Unique request ID for correlating the acknowledgement.
     pub request_id: Option<String>,
@@ -681,6 +736,7 @@ pub struct CommandExecuteData {
 /// Operation applied to an autopilot objective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum AutopilotObjectiveOperation {
     Create,
     Update,
@@ -690,6 +746,7 @@ pub enum AutopilotObjectiveOperation {
 /// Status of an autopilot objective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AutopilotObjectiveStatus {
     Active,
     Paused,
@@ -700,6 +757,7 @@ pub enum AutopilotObjectiveStatus {
 /// Operation applied to the session plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PlanChangedOperation {
     Create,
     Update,
@@ -709,6 +767,7 @@ pub enum PlanChangedOperation {
 /// Operation applied to a workspace file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum WorkspaceFileChangedOperation {
     Create,
     Update,
@@ -717,6 +776,7 @@ pub enum WorkspaceFileChangedOperation {
 /// Host type for the working-directory context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum WorkingDirectoryHostType {
     GitHub,
     Ado,
@@ -725,6 +785,7 @@ pub enum WorkingDirectoryHostType {
 /// Where a failed model call originated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModelCallFailureSource {
     TopLevel,
     Subagent,
@@ -734,6 +795,7 @@ pub enum ModelCallFailureSource {
 /// Action the user took on an elicitation request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ElicitationCompletedAction {
     Accept,
     Decline,
@@ -743,6 +805,7 @@ pub enum ElicitationCompletedAction {
 /// Action selected when exiting plan mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExitPlanModeAction {
     ExitOnly,
     Interactive,
@@ -752,6 +815,7 @@ pub enum ExitPlanModeAction {
 
 /// Connection status of an MCP server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum McpServerStatus {
     #[serde(rename = "connected")]
     Connected,
@@ -770,6 +834,7 @@ pub enum McpServerStatus {
 /// Where an MCP server definition came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum McpServerSource {
     User,
     Workspace,
@@ -780,6 +845,7 @@ pub enum McpServerSource {
 /// Transport used to reach an MCP server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum McpServerTransport {
     Stdio,
     Http,
@@ -790,6 +856,7 @@ pub enum McpServerTransport {
 /// Where a skill was loaded from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum SkillSource {
     Project,
     Inherited,
@@ -803,6 +870,7 @@ pub enum SkillSource {
 /// Where an extension was loaded from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ExtensionSource {
     Project,
     User,
@@ -811,6 +879,7 @@ pub enum ExtensionSource {
 /// Runtime status of a loaded extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ExtensionStatus {
     Running,
     Disabled,
@@ -820,6 +889,7 @@ pub enum ExtensionStatus {
 
 /// A permission rule that matched during a permission decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PermissionRule {
     /// Rule kind (e.g. `shell`, `write`).
     pub kind: String,
@@ -830,6 +900,7 @@ pub struct PermissionRule {
 /// Outcome of a permission request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum PermissionResult {
     /// Approved for this single invocation.
     #[serde(rename = "approved")]
@@ -898,6 +969,7 @@ pub enum PermissionResult {
 /// A system notification payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum SystemNotification {
     /// A background agent finished.
     #[serde(rename = "agent_completed", rename_all = "camelCase")]
@@ -977,6 +1049,7 @@ pub enum SystemNotification {
 /// Static OAuth client configuration advertised by an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpOauthStaticClientConfig {
     /// OAuth client identifier.
     pub client_id: String,
@@ -990,6 +1063,7 @@ pub struct McpOauthStaticClientConfig {
 
 /// A command exposed by the session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ChangedCommand {
     /// Command name without the leading `/`.
     pub name: String,
@@ -1001,6 +1075,7 @@ pub struct ChangedCommand {
 /// UI capabilities advertised by the client.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CapabilitiesChangedUi {
     /// Whether canvases are supported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1016,6 +1091,7 @@ pub struct CapabilitiesChangedUi {
 /// A skill loaded into the session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LoadedSkill {
     /// Skill name.
     pub name: String,
@@ -1035,6 +1111,7 @@ pub struct LoadedSkill {
 /// A custom agent available to the session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UpdatedCustomAgent {
     /// Stable agent identifier.
     pub id: String,
@@ -1058,6 +1135,7 @@ pub struct UpdatedCustomAgent {
 /// An MCP server known to the session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LoadedMcpServer {
     /// Server name.
     pub name: String,
@@ -1083,6 +1161,7 @@ pub struct LoadedMcpServer {
 /// An extension loaded into the session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LoadedExtension {
     /// Extension identifier.
     pub id: String,
@@ -1097,6 +1176,7 @@ pub struct LoadedExtension {
 /// An action exposed by a registered canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RegisteredCanvasAction {
     /// Action name.
     pub name: String,
@@ -1111,6 +1191,7 @@ pub struct RegisteredCanvasAction {
 /// A canvas in the session canvas registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RegisteredCanvas {
     /// Canvas identifier.
     pub canvas_id: String,
@@ -1133,6 +1214,7 @@ pub struct RegisteredCanvas {
 
 /// Error detail for a failed MCP app tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct McpAppToolCallError {
     /// Error message.
     pub message: String,
@@ -1141,6 +1223,7 @@ pub struct McpAppToolCallError {
 /// UI metadata attached to an MCP app tool.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpAppToolMetaUi {
     /// Resource URI backing the tool UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1155,6 +1238,7 @@ pub struct McpAppToolMetaUi {
 
 /// Metadata attached to an MCP app tool.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct McpAppToolMeta {
     /// UI metadata, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1171,6 +1255,7 @@ pub struct McpAppToolMeta {
 /// Data for `session.remote_steerable_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RemoteSteerableChangedData {
     /// Whether the remote session can currently be steered.
     pub remote_steerable: bool,
@@ -1178,6 +1263,7 @@ pub struct RemoteSteerableChangedData {
 
 /// Data for `session.title_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TitleChangedData {
     /// The new session title.
     pub title: String,
@@ -1186,6 +1272,7 @@ pub struct TitleChangedData {
 /// Data for `session.schedule_created`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ScheduleCreatedData {
     /// Schedule identifier.
     pub id: i64,
@@ -1203,6 +1290,7 @@ pub struct ScheduleCreatedData {
 
 /// Data for `session.schedule_cancelled`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScheduleCancelledData {
     /// Schedule identifier.
     pub id: i64,
@@ -1211,6 +1299,7 @@ pub struct ScheduleCancelledData {
 /// Data for `session.autopilot_objective_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AutopilotObjectiveChangedData {
     /// The operation that was applied.
     pub operation: AutopilotObjectiveOperation,
@@ -1225,6 +1314,7 @@ pub struct AutopilotObjectiveChangedData {
 /// Data for `session.warning`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SessionWarningData {
     /// Warning message.
     pub message: String,
@@ -1238,6 +1328,7 @@ pub struct SessionWarningData {
 /// Data for `session.mode_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModeChangedData {
     /// The mode the session switched to.
     pub new_mode: crate::types::SessionMode,
@@ -1248,6 +1339,7 @@ pub struct ModeChangedData {
 /// Data for `session.permissions_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PermissionsChangedData {
     /// Whether all permissions are currently auto-approved.
     pub allow_all_permissions: bool,
@@ -1257,6 +1349,7 @@ pub struct PermissionsChangedData {
 
 /// Data for `session.plan_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PlanChangedData {
     /// The operation that was applied to the plan.
     pub operation: PlanChangedOperation,
@@ -1264,6 +1357,7 @@ pub struct PlanChangedData {
 
 /// Data for `session.workspace_file_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WorkspaceFileChangedData {
     /// The operation that was applied.
     pub operation: WorkspaceFileChangedOperation,
@@ -1274,6 +1368,7 @@ pub struct WorkspaceFileChangedData {
 /// Data for `session.context_changed` (the working-directory context).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WorkingDirectoryContextData {
     /// Current working directory.
     pub cwd: String,
@@ -1302,6 +1397,7 @@ pub struct WorkingDirectoryContextData {
 
 /// Data for `session.task_complete`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TaskCompleteData {
     /// Whether the task succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1314,6 +1410,7 @@ pub struct TaskCompleteData {
 /// Data for `assistant.streaming_delta`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantStreamingDeltaData {
     /// Total bytes streamed so far for this response.
     pub total_response_size_bytes: i64,
@@ -1322,6 +1419,7 @@ pub struct AssistantStreamingDeltaData {
 /// Data for `assistant.message_start`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AssistantMessageStartData {
     /// Identifier of the message that is starting.
     pub message_id: String,
@@ -1333,6 +1431,7 @@ pub struct AssistantMessageStartData {
 /// Data for `model.call_failure`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ModelCallFailureData {
     /// Where the failing call originated.
     pub source: ModelCallFailureSource,
@@ -1364,10 +1463,12 @@ pub struct ModelCallFailureData {
 
 /// Data for `subagent.deselected` (no fields).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomAgentDeselectedData {}
 
 /// Data for `hook.progress`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HookProgressData {
     /// Progress message emitted by the hook.
     pub message: String,
@@ -1375,6 +1476,7 @@ pub struct HookProgressData {
 
 /// Data for `system.notification`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SystemNotificationData {
     /// Rendered notification text.
     pub content: String,
@@ -1385,6 +1487,7 @@ pub struct SystemNotificationData {
 /// Data for `permission.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PermissionCompletedData {
     /// Identifier of the original permission request.
     pub request_id: String,
@@ -1398,6 +1501,7 @@ pub struct PermissionCompletedData {
 /// Data for `user_input.requested`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UserInputRequestedData {
     /// Identifier used to correlate the response.
     pub request_id: String,
@@ -1417,6 +1521,7 @@ pub struct UserInputRequestedData {
 /// Data for `user_input.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UserInputCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1431,6 +1536,7 @@ pub struct UserInputCompletedData {
 /// Data for `elicitation.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ElicitationCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1445,6 +1551,7 @@ pub struct ElicitationCompletedData {
 /// Data for `sampling.requested`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SamplingRequestedData {
     /// Identifier used to correlate the response.
     pub request_id: String,
@@ -1460,6 +1567,7 @@ pub struct SamplingRequestedData {
 /// Data for `sampling.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SamplingCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1468,6 +1576,7 @@ pub struct SamplingCompletedData {
 /// Data for `mcp.oauth_required`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpOauthRequiredData {
     /// Identifier used to correlate the response.
     pub request_id: String,
@@ -1483,6 +1592,7 @@ pub struct McpOauthRequiredData {
 /// Data for `mcp.oauth_completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpOauthCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1490,6 +1600,7 @@ pub struct McpOauthCompletedData {
 
 /// Data for `session.custom_notification`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomNotificationData {
     /// Notification name.
     pub name: String,
@@ -1508,6 +1619,7 @@ pub struct CustomNotificationData {
 /// Data for `external_tool.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ExternalToolCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1516,6 +1628,7 @@ pub struct ExternalToolCompletedData {
 /// Data for `command.queued`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CommandQueuedData {
     /// Identifier used to correlate completion.
     pub request_id: String,
@@ -1526,6 +1639,7 @@ pub struct CommandQueuedData {
 /// Data for `command.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CommandCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1534,6 +1648,7 @@ pub struct CommandCompletedData {
 /// Data for `auto_mode_switch.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AutoModeSwitchCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1543,6 +1658,7 @@ pub struct AutoModeSwitchCompletedData {
 
 /// Data for `commands.changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CommandsChangedData {
     /// The full current command list.
     pub commands: Vec<ChangedCommand>,
@@ -1550,6 +1666,7 @@ pub struct CommandsChangedData {
 
 /// Data for `capabilities.changed`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CapabilitiesChangedData {
     /// UI capabilities, when advertised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1559,6 +1676,7 @@ pub struct CapabilitiesChangedData {
 /// Data for `exit_plan_mode.completed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ExitPlanModeCompletedData {
     /// Identifier of the original request.
     pub request_id: String,
@@ -1578,6 +1696,7 @@ pub struct ExitPlanModeCompletedData {
 
 /// Data for `session.tools_updated`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolsUpdatedData {
     /// The model the tool set was recomputed for.
     pub model: String,
@@ -1585,10 +1704,12 @@ pub struct ToolsUpdatedData {
 
 /// Data for `session.background_tasks_changed` (no fields).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BackgroundTasksChangedData {}
 
 /// Data for `session.skills_loaded`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SkillsLoadedData {
     /// The skills that are now loaded.
     pub skills: Vec<LoadedSkill>,
@@ -1596,6 +1717,7 @@ pub struct SkillsLoadedData {
 
 /// Data for `session.custom_agents_updated`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomAgentsUpdatedData {
     /// The agents that are now available.
     pub agents: Vec<UpdatedCustomAgent>,
@@ -1609,6 +1731,7 @@ pub struct CustomAgentsUpdatedData {
 
 /// Data for `session.mcp_servers_loaded`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct McpServersLoadedData {
     /// The MCP servers that are now known.
     pub servers: Vec<LoadedMcpServer>,
@@ -1617,6 +1740,7 @@ pub struct McpServersLoadedData {
 /// Data for `session.mcp_server_status_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpServerStatusChangedData {
     /// Name of the affected server.
     pub server_name: String,
@@ -1629,6 +1753,7 @@ pub struct McpServerStatusChangedData {
 
 /// Data for `session.extensions_loaded`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ExtensionsLoadedData {
     /// The extensions that are now loaded.
     pub extensions: Vec<LoadedExtension>,
@@ -1637,6 +1762,7 @@ pub struct ExtensionsLoadedData {
 /// Data for `session.canvas.opened`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CanvasOpenedData {
     /// Whether the canvas is ready or stale.
     pub availability: crate::canvas::CanvasInstanceAvailability,
@@ -1667,6 +1793,7 @@ pub struct CanvasOpenedData {
 
 /// Data for `session.canvas.registry_changed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CanvasRegistryChangedData {
     /// The full current canvas registry.
     pub canvases: Vec<RegisteredCanvas>,
@@ -1675,6 +1802,7 @@ pub struct CanvasRegistryChangedData {
 /// Data for `mcp_app.tool_call_complete`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct McpAppToolCallCompleteData {
     /// Name of the MCP server that handled the call.
     pub server_name: String,
@@ -1700,6 +1828,7 @@ pub struct McpAppToolCallCompleteData {
 
 /// Event data variants - the payload of each event type.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum SessionEventData {
     SessionStart(SessionStartData),
     SessionResume(SessionResumeData),
@@ -1848,6 +1977,7 @@ pub enum SessionEventData {
 /// that varies based on the event type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RawSessionEvent {
     pub id: String,
     pub timestamp: String,
@@ -1860,8 +1990,28 @@ pub struct RawSessionEvent {
     pub data: serde_json::Value,
 }
 
+impl RawSessionEvent {
+    /// Create a raw event without parent or ephemeral metadata.
+    pub fn new(
+        id: impl Into<String>,
+        timestamp: impl Into<String>,
+        event_type: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            timestamp: timestamp.into(),
+            event_type: event_type.into(),
+            parent_id: None,
+            ephemeral: None,
+            data,
+        }
+    }
+}
+
 /// A parsed session event with typed data.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SessionEvent {
     /// Unique event ID.
     pub id: String,
@@ -2253,6 +2403,36 @@ fn parse_event_data(event_type: &str, data: serde_json::Value) -> SessionEventDa
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_raw_event_constructor_preserves_unknown_payload() {
+        let payload = json!({"futureField": {"nested": [1, null, "value"]}});
+        let raw = RawSessionEvent::new(
+            "event-1",
+            String::from("2026-01-01T00:00:00Z"),
+            "future.event",
+            payload.clone(),
+        );
+        assert_eq!(
+            serde_json::to_value(&raw).unwrap(),
+            json!({
+                "id": "event-1",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "type": "future.event",
+                "data": payload
+            })
+        );
+        let event = SessionEvent::from_raw(raw);
+        assert_eq!(event.id, "event-1");
+        assert_eq!(event.timestamp, "2026-01-01T00:00:00Z");
+        assert_eq!(event.event_type, "future.event");
+        assert!(event.parent_id.is_none());
+        assert!(event.ephemeral.is_none());
+        match event.data {
+            SessionEventData::Unknown(data) => assert_eq!(data, payload),
+            _ => panic!("expected an unknown event"),
+        }
+    }
 
     #[test]
     fn test_parse_assistant_message() {

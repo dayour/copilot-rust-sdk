@@ -34,6 +34,138 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Protocol evolution
+//!
+//! Public enums in [`types`] and [`events`], including [`SessionEventData`], and
+//! [`CopilotError`] are `#[non_exhaustive]`. Downstream matches must include a
+//! wildcard arm, even when handling every currently known variant:
+//!
+//! ```
+//! use copilot_sdk::{CopilotError, SessionMode};
+//!
+//! fn mode_name(mode: SessionMode) -> &'static str {
+//!     match mode {
+//!         SessionMode::Interactive => "interactive",
+//!         SessionMode::Plan => "plan",
+//!         SessionMode::Autopilot => "autopilot",
+//!         _ => "unsupported mode",
+//!     }
+//! }
+//!
+//! fn report_error(error: CopilotError) -> String {
+//!     match error {
+//!         CopilotError::NotConnected => "Connect before sending a request".into(),
+//!         other => other.to_string(),
+//!     }
+//! }
+//! assert_eq!(mode_name(SessionMode::Plan), "plan");
+//! assert!(!report_error(CopilotError::NotConnected).is_empty());
+//! ```
+//!
+//! Exhaustive matches are rejected outside this crate:
+//!
+//! ```compile_fail,E0004
+//! use copilot_sdk::SessionMode;
+//!
+//! fn mode_name(mode: SessionMode) -> &'static str {
+//!     match mode {
+//!         SessionMode::Interactive => "interactive",
+//!         SessionMode::Plan => "plan",
+//!         SessionMode::Autopilot => "autopilot",
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail,E0004
+//! use copilot_sdk::CopilotError;
+//!
+//! fn handle(error: CopilotError) {
+//!     match error {
+//!         CopilotError::Transport(_) | CopilotError::ConnectionClosed
+//!         | CopilotError::NotConnected | CopilotError::JsonRpc { .. }
+//!         | CopilotError::ProtocolMismatch { .. } | CopilotError::Protocol(_)
+//!         | CopilotError::Json(_) | CopilotError::Timeout(_)
+//!         | CopilotError::SessionNotFound(_) | CopilotError::SessionDestroyed
+//!         | CopilotError::InvalidConfig(_) | CopilotError::ProcessStart(_)
+//!         | CopilotError::ProcessExit(_) | CopilotError::PortDetectionFailed
+//!         | CopilotError::Shutdown | CopilotError::ToolNotFound(_)
+//!         | CopilotError::ToolError(_) | CopilotError::PermissionDenied(_)
+//!         | CopilotError::ChannelError => {}
+//!     }
+//! }
+//! ```
+//!
+//! Event envelopes, event payload structs, and inbound response/metadata structs
+//! are also non-exhaustive. Read their public fields as usual, but use `..` when
+//! destructuring. Construct them using provided helpers, `Default` where available,
+//! or Serde deserialization rather than struct literals (including literals with
+//! `..Default::default()`). Configuration and request structs remain constructible
+//! with literals.
+//!
+//! ```
+//! use copilot_sdk::{ModelBilling, ModelInfo, ModelPolicy, SessionEvent, SessionEventData};
+//! use copilot_sdk::events::{AssistantMessageData, RawSessionEvent, SessionIdleData};
+//! use serde_json::json;
+//!
+//! let mut model = ModelInfo::new("custom-model", "Custom model");
+//! model.capabilities.supports.vision = true;
+//! model.capabilities.limits.max_context_window_tokens = 128_000;
+//! model.policy = Some(ModelPolicy::new("enabled"));
+//! let mut billing = ModelBilling::default();
+//! billing.multiplier = 1.0;
+//! model.billing = Some(billing);
+//! assert!(model.capabilities.supports.vision);
+//!
+//! let mut raw = RawSessionEvent::new(
+//!     "event-1", "2026-01-01T00:00:00Z", "assistant.message",
+//!     json!({"messageId": "message-1", "content": "Hello"}),
+//! );
+//! assert!(raw.parent_id.is_none());
+//! assert!(raw.ephemeral.is_none());
+//! raw.parent_id = Some("parent-1".into());
+//! raw.ephemeral = Some(true);
+//! assert_eq!(serde_json::to_value(&raw)?["type"], "assistant.message");
+//! let event = SessionEvent::from_raw(raw);
+//! assert_eq!(event.parent_id.as_deref(), Some("parent-1"));
+//! assert_eq!(event.ephemeral, Some(true));
+//! match event.data {
+//!     SessionEventData::AssistantMessage(AssistantMessageData { content, .. }) => {
+//!         assert_eq!(content, "Hello");
+//!     }
+//!     _ => panic!("expected an assistant message"),
+//! }
+//! let idle = SessionEventData::SessionIdle(SessionIdleData::default());
+//! assert!(matches!(idle, SessionEventData::SessionIdle(_)));
+//! # Ok::<(), serde_json::Error>(())
+//! ```
+//!
+//! Even empty event payloads cannot be constructed with literals:
+//!
+//! ```compile_fail,E0639
+//! use copilot_sdk::events::SessionIdleData;
+//! let idle = SessionIdleData {};
+//! ```
+//!
+//! Response literals and exhaustive struct patterns are likewise rejected:
+//!
+//! ```compile_fail,E0639
+//! use copilot_sdk::ModelCapabilities;
+//! let capabilities = ModelCapabilities { ..Default::default() };
+//! ```
+//!
+//! ```compile_fail,E0638
+//! use copilot_sdk::events::ToolResultContent;
+//! fn content(result: ToolResultContent) -> String {
+//!     let ToolResultContent { content } = result;
+//!     content
+//! }
+//! ```
+//!
+//! These attributes allow future Rust variants and fields; they do not change
+//! JSON encoding or make unknown enum strings deserializable. Unrecognized or
+//! malformed event payloads still use [`SessionEventData::Unknown`]. Internal
+//! matches may remain exhaustive so new variants are checked by the compiler.
 
 pub mod canvas;
 pub mod client;

@@ -8,6 +8,7 @@ use thiserror::Error;
 
 /// Main error type for the Copilot SDK.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CopilotError {
     /// Transport/IO error
     #[error("Transport error: {0}")]
