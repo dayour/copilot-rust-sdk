@@ -6,7 +6,7 @@ This is a research and development tool, not intended for production use.
 
 ## Requirements
 
-- Rust 1.99+ (Edition 2026)
+- Rust 1.99.0+ (Edition 2021)
 - GitHub Copilot CLI installed and authenticated
 - `copilot` available in `PATH`, or set `COPILOT_CLI_PATH` to the CLI executable/script
 
@@ -14,7 +14,7 @@ This is a research and development tool, not intended for production use.
 
 - Changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
 - API compatibility follows the repository [semver policy](docs/semver-policy.md).
-- The minimum supported Rust version is Rust 1.85 until explicitly raised; see
+- The minimum supported Rust version is Rust 1.99.0; see
   the [MSRV policy](docs/msrv-policy.md).
 
 ## Install
