@@ -468,10 +468,7 @@ async fn snapshot_conformance_tools_and_sessions() -> copilot_sdk::Result<()> {
         let (server, port) = SnapshotServer::bind(test.turns.clone())
             .await
             .map_err(|e| {
-                copilot_sdk::CopilotError::Transport(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
+                copilot_sdk::CopilotError::Transport(std::io::Error::other(e.to_string()))
             })?;
         let server_task = tokio::spawn(async move { server.run().await });
 

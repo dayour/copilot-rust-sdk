@@ -2504,7 +2504,7 @@ pub struct AutoModeSwitchRequest {
 }
 
 /// Response to an auto-mode-switch request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoModeSwitchResponse {
     /// Allow the switch for this turn only.
@@ -2512,13 +2512,8 @@ pub enum AutoModeSwitchResponse {
     /// Allow the switch and persist it as a setting.
     YesAlways,
     /// Decline the switch.
+    #[default]
     No,
-}
-
-impl Default for AutoModeSwitchResponse {
-    fn default() -> Self {
-        Self::No
-    }
 }
 
 // =============================================================================
@@ -3968,6 +3963,13 @@ pub struct TelemetryConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_auto_mode_switch_default_declines() {
+        let response = AutoModeSwitchResponse::default();
+        assert_eq!(response, AutoModeSwitchResponse::No);
+        assert_eq!(serde_json::to_value(response).unwrap(), "no");
+    }
 
     fn assert_type_tag_roundtrip<T>(value: T, expected_tag: &str)
     where

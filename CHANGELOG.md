@@ -8,6 +8,12 @@ and this project follows the versioning policy documented in
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** raised the minimum supported Rust version and pinned development
+  and CI toolchains from Rust 1.85 to Rust 1.99.0. Edition 2021 is unchanged; see
+  the [MSRV audit and edition decision](docs/msrv-policy.md).
+
 ### Added
 
 - Added release policy documentation for changelog, semver, and MSRV handling.

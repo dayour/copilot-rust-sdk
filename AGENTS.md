@@ -24,8 +24,8 @@ Feature-gated tests:
 
 ## Coding Style & Naming
 
-- Rust `1.85.0` is pinned in `rust-toolchain.toml` (Edition 2021).
-- MSRV is Rust 1.85 until explicitly raised in `Cargo.toml`,
+- Rust `1.99.0` is pinned in `rust-toolchain.toml` (Edition 2021).
+- MSRV is Rust 1.99.0 until explicitly raised in `Cargo.toml`,
   `rust-toolchain.toml`, and `docs/msrv-policy.md`.
 - Format with `rustfmt`; lint with `clippy`.
 - Keep `unsafe` out: the crate uses `#![forbid(unsafe_code)]`.

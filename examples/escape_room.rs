@@ -19,14 +19,14 @@ fn prime_factors(mut n: u64) -> Vec<u64> {
         return factors;
     }
 
-    while n % 2 == 0 {
+    while n.is_multiple_of(2) {
         factors.push(2);
         n /= 2;
     }
 
     let mut d = 3u64;
     while d * d <= n {
-        while n % d == 0 {
+        while n.is_multiple_of(d) {
             factors.push(d);
             n /= d;
         }
