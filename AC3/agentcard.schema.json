@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:repo-toolbox:agentcard:v1",
+  "title": "Repository Agent Card",
+  "description": "PowerShell-generated card and ten tab payloads. The agentcard_schema inventory field carries this document as JSON text in every export format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "kind", "agentcard_ID", "name", "displayName", "description", "repository", "sourceUrl", "observedAt", "metadataStatus", "attention", "tabs", "limitations"],
+  "properties": {
+    "schema": { "const": "urn:repo-toolbox:agentcard:v1" },
+    "version": { "const": "1.0" },
+    "kind": { "const": "AgentCard" },
+    "agentcard_ID": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "displayName": { "type": "string", "minLength": 1 },
+    "description": { "type": ["string", "null"] },
+    "repository": { "type": "string", "minLength": 1 },
+    "sourceUrl": { "type": "string", "format": "uri" },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "metadataStatus": { "enum": ["complete", "github-access-blocked"] },
+    "attention": { "$ref": "#/definitions/attention" },
+    "tabs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "issues", "pull-requests", "agents", "actions", "projects", "wiki", "security", "insights", "settings"],
+      "properties": {
+        "code": { "$ref": "#/definitions/tab" },
+        "issues": { "$ref": "#/definitions/tab" },
+        "pull-requests": { "$ref": "#/definitions/tab" },
+        "agents": { "$ref": "#/definitions/tab" },
+        "actions": { "$ref": "#/definitions/tab" },
+        "projects": { "$ref": "#/definitions/tab" },
+        "wiki": { "$ref": "#/definitions/tab" },
+        "security": { "$ref": "#/definitions/tab" },
+        "insights": { "$ref": "#/definitions/tab" },
+        "settings": { "$ref": "#/definitions/tab" }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "definitions": {
+    "attention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "rank", "failedCount", "missingCount", "flags", "style"],
+      "properties": {
+        "state": { "enum": ["clear", "not-reported", "failed"] },
+        "rank": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "failedCount": { "type": "integer", "minimum": 0 },
+        "missingCount": { "type": "integer", "minimum": 0 },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "status", "detail"],
+            "properties": {
+              "field": { "type": "string", "minLength": 1 },
+              "status": { "enum": ["failed", "not-reported"] },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "style": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outline", "background"],
+          "properties": {
+            "outline": { "const": "#ff8c00" },
+            "background": { "const": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))" }
+          }
+        }
+      }
+    },
+    "tab": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "summary", "schema", "value", "sources", "notApplicable", "attention"],
+      "properties": {
+        "key": { "enum": ["code", "issues", "pull-requests", "agents", "actions", "projects", "wiki", "security", "insights", "settings"] },
+        "label": { "type": "string" },
+        "summary": { "type": "string" },
+        "schema": { "type": "object", "required": ["$schema", "$id", "type", "properties", "required"] },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "repository", "sourceUrl", "inventoryObservedAt", "metadataStatus", "data"],
+          "properties": {
+            "schema": { "type": "string" },
+            "repository": { "type": "string" },
+            "sourceUrl": { "type": "string", "format": "uri" },
+            "inventoryObservedAt": { "type": "string", "format": "date-time" },
+            "metadataStatus": { "enum": ["complete", "github-access-blocked"] },
+            "data": { "type": "object" }
+          }
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "observedAt", "source", "detail"],
+            "properties": {
+              "status": { "enum": ["observed", "unavailable", "failed", "not-applicable"] },
+              "observedAt": { "type": "string", "format": "date-time" },
+              "source": { "type": "string" },
+              "detail": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "notApplicable": { "type": "array", "items": { "type": "string" } },
+        "attention": { "$ref": "#/definitions/attention" }
+      }
+    }
+  }
+}

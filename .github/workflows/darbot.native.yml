@@ -1,0 +1,59 @@
+name: darbot - Windows MXC
+on:
+  workflow_dispatch:
+    inputs:
+      analyze:
+        description: Run the no-tool darbot analysis after contained validation
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: darbot-native-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  darbot:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: [darbot-windows-mxc]
+    timeout-minutes: 15
+    steps:
+      - name: Check out the selected default-branch revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify native runtime and authoring source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE '.github\workflows\darbot.md')).Replace("`r`n", "`n")
+          $sourceHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($source)))
+          if ($sourceHash -ne 'DCEA590885983B32257D629EF712D71D085A38A7233EF3022F457EFB3B13F0C9') {
+            throw 'The workflow source changed; recompile the native profile.'
+          }
+          $runtime = 'R:\gh-aw\native-windows'
+          $manifestPath = Join-Path $runtime 'runtime-manifest.json'
+          if ((Get-FileHash -LiteralPath $manifestPath).Hash -ne 'B5523593B4E8ADB0D3E928C3BEFD69236B02DF075F6084FF26554C130803889B') {
+            throw 'The installed runtime differs from this compiled workflow.'
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $actual = @(Get-ChildItem -LiteralPath $runtime -File -Recurse | Where-Object FullName -NE $manifestPath)
+          if ($actual.Count -ne $manifest.files.Count) { throw 'The runtime file inventory changed.' }
+          foreach ($file in $manifest.files) {
+            if ((Get-FileHash -LiteralPath (Join-Path $runtime $file.path)).Hash -ne $file.sha256) {
+              throw "Runtime integrity mismatch: $($file.path)"
+            }
+          }
+          & 'R:\gh-aw\native-windows\darbot.exe' verify 'R:\actions-runner\darbot\work'
+          if ($LASTEXITCODE -ne 0) { throw 'Native containment verification failed.' }
+      - name: Execute the darbot native profile
+        shell: pwsh
+        env:
+          DARBOT_ANALYZE: ${{ inputs.analyze }}
+          COPILOT_GITHUB_TOKEN: ${{ inputs.analyze && secrets.COPILOT_GITHUB_TOKEN || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & 'R:\gh-aw\native-windows\Invoke-DarbotWorkflow.ps1' `
+            -Workspace $env:GITHUB_WORKSPACE `
+            -WorkRoot 'R:\actions-runner\darbot\work' `
+            -ExpectedRepository $env:GITHUB_REPOSITORY `
+            -Analyze:([bool]::Parse($env:DARBOT_ANALYZE))

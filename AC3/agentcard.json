@@ -1,0 +1,1050 @@
+{
+  "schema": "urn:repo-toolbox:agentcard:v1",
+  "version": "1.0",
+  "kind": "AgentCard",
+  "agentcard_ID": "#000034",
+  "name": "copilot-rust-sdk",
+  "displayName": "dayour/copilot-rust-sdk",
+  "description": "",
+  "repository": "dayour/copilot-rust-sdk",
+  "sourceUrl": "https://github.com/dayour/copilot-rust-sdk",
+  "observedAt": "2026-11-17T07:24:50.4079270Z",
+  "metadataStatus": "complete",
+  "attention": {
+    "state": "failed",
+    "rank": 2,
+    "failedCount": 1,
+    "missingCount": 1,
+    "flags": [
+      {
+        "field": "actions.defaultCommitRollup",
+        "status": "failed",
+        "detail": "GitHub reports FAILURE for the observed default-branch commit."
+      },
+      {
+        "field": "wiki.pageCount",
+        "status": "not-reported",
+        "detail": "Value was not reported; inspect the source observation for its availability."
+      }
+    ],
+    "style": {
+      "outline": "#ff8c00",
+      "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+    }
+  },
+  "tabs": {
+    "code": {
+      "key": "code",
+      "label": "Code",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Code repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:code:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:code:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "defaultBranch",
+              "commit",
+              "branches",
+              "tags",
+              "language",
+              "lastCommitDate",
+              "releaseVersion",
+              "releaseCount"
+            ],
+            "properties": {
+              "defaultBranch": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string"
+              },
+              "branches": {
+                "type": "integer"
+              },
+              "tags": {
+                "type": "integer"
+              },
+              "language": {
+                "type": "string"
+              },
+              "lastCommitDate": {
+                "type": "string"
+              },
+              "releaseVersion": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "null"
+                ]
+              },
+              "releaseCount": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:code:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "defaultBranch": "main",
+          "commit": "163a37e220befd8d4280cff10a0ded56f2041f85",
+          "branches": 3,
+          "tags": 0,
+          "language": "Rust",
+          "lastCommitDate": "2026-11-08T03:21:24.0000000Z",
+          "releaseVersion": null,
+          "releaseCount": 0
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [
+        "releaseVersion"
+      ],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "issues": {
+      "key": "issues",
+      "label": "Issues",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Issues repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:issues:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:issues:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "enabled",
+              "openCount",
+              "countsObservedAt"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "openCount": {
+                "type": "integer"
+              },
+              "countsObservedAt": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:issues:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/issues",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "enabled": true,
+          "openCount": 0,
+          "countsObservedAt": "2026-11-17T07:24:50.4079270Z"
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "pull-requests": {
+      "key": "pull-requests",
+      "label": "Pull requests",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Pull requests repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:pull-requests:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:pull-requests:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "totalCount",
+              "openCount",
+              "closedCount",
+              "mergedCount",
+              "historyObservedAt",
+              "collectionStatus"
+            ],
+            "properties": {
+              "totalCount": {
+                "type": "integer"
+              },
+              "openCount": {
+                "type": "integer"
+              },
+              "closedCount": {
+                "type": "integer"
+              },
+              "mergedCount": {
+                "type": "integer"
+              },
+              "historyObservedAt": {
+                "type": "string"
+              },
+              "collectionStatus": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:pull-requests:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/pulls",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "totalCount": 16,
+          "openCount": 0,
+          "closedCount": 5,
+          "mergedCount": 11,
+          "historyObservedAt": "2026-11-17T07:24:50.4079270Z",
+          "collectionStatus": "observed"
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "agents": {
+      "key": "agents",
+      "label": "Agents",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Agents repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:agents:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:agents:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "definitions",
+              "skills",
+              "guidance",
+              "activeSessions"
+            ],
+            "properties": {
+              "definitions": {
+                "type": "integer"
+              },
+              "skills": {
+                "type": "integer"
+              },
+              "guidance": {
+                "type": "integer"
+              },
+              "activeSessions": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:agents:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/agents",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "definitions": 0,
+          "skills": 0,
+          "guidance": 1,
+          "activeSessions": null
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:27:55.0614373Z",
+          "source": "Tracked configuration counts",
+          "detail": null
+        }
+      },
+      "notApplicable": [
+        "activeSessions"
+      ],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "actions": {
+      "key": "actions",
+      "label": "Actions",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Actions repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:actions:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:actions:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "defaultCommitRollup",
+              "checksObservedAt",
+              "workflowFiles",
+              "workflowRunCount",
+              "loadedCount",
+              "hasMore",
+              "checksHaveMore"
+            ],
+            "properties": {
+              "defaultCommitRollup": {
+                "type": "string"
+              },
+              "checksObservedAt": {
+                "type": "string"
+              },
+              "workflowFiles": {
+                "type": "integer"
+              },
+              "workflowRunCount": {
+                "type": "integer"
+              },
+              "loadedCount": {
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "checksHaveMore": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:actions:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/actions",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "defaultCommitRollup": "FAILURE",
+          "checksObservedAt": "2026-11-17T07:24:50.4079270Z",
+          "workflowFiles": 1,
+          "workflowRunCount": 52,
+          "loadedCount": 20,
+          "hasMore": true,
+          "checksHaveMore": false
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "failed",
+        "rank": 2,
+        "failedCount": 1,
+        "missingCount": 0,
+        "flags": [
+          {
+            "field": "defaultCommitRollup",
+            "status": "failed",
+            "detail": "GitHub reports FAILURE for the observed default-branch commit."
+          }
+        ],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "projects": {
+      "key": "projects",
+      "label": "Projects",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Projects repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:projects:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:projects:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:projects:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/projects",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "enabled": true
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "wiki": {
+      "key": "wiki",
+      "label": "Wiki",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Wiki repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:wiki:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:wiki:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "enabled",
+              "pageCount"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "pageCount": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:wiki:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/wiki",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "enabled": true,
+          "pageCount": null
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "not-reported",
+        "rank": 1,
+        "failedCount": 0,
+        "missingCount": 1,
+        "flags": [
+          {
+            "field": "pageCount",
+            "status": "not-reported",
+            "detail": "Value was not reported; inspect the source observation for its availability."
+          }
+        ],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "security": {
+      "key": "security",
+      "label": "Security and quality",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Security and quality repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:security:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:security:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "assessment"
+            ],
+            "properties": {
+              "assessment": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:security:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/security",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "assessment": "not-exported"
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "not-applicable",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": "Private alert data is intentionally excluded from this portable profile."
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "insights": {
+      "key": "insights",
+      "label": "Insights",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Insights repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:insights:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:insights:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "stars",
+              "forks",
+              "watchers",
+              "lastPush"
+            ],
+            "properties": {
+              "stars": {
+                "type": "integer"
+              },
+              "forks": {
+                "type": "integer"
+              },
+              "watchers": {
+                "type": "integer"
+              },
+              "lastPush": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:insights:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/pulse",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "stars": 0,
+          "forks": 0,
+          "watchers": 0,
+          "lastPush": "2026-11-08T03:21:24.0000000Z"
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    },
+    "settings": {
+      "key": "settings",
+      "label": "Settings",
+      "summary": "Portable repository-scoped snapshot; private details and local machine paths are excluded.",
+      "schema": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "repository",
+          "sourceUrl",
+          "inventoryObservedAt",
+          "metadataStatus",
+          "data"
+        ],
+        "title": "Settings repository snapshot",
+        "$id": "urn:repo-toolbox:repository-tab:settings:v1",
+        "properties": {
+          "schema": {
+            "const": "urn:repo-toolbox:repository-tab:settings:v1"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "inventoryObservedAt": {
+            "type": "string"
+          },
+          "metadataStatus": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": false,
+            "required": [
+              "visibility",
+              "archived",
+              "disabled",
+              "template",
+              "defaultBranch",
+              "allowForking",
+              "issuesEnabled",
+              "wikiEnabled",
+              "projectsEnabled",
+              "discussionsEnabled"
+            ],
+            "properties": {
+              "visibility": {
+                "type": "string"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "template": {
+                "type": "boolean"
+              },
+              "defaultBranch": {
+                "type": "string"
+              },
+              "allowForking": {
+                "type": "boolean"
+              },
+              "issuesEnabled": {
+                "type": "boolean"
+              },
+              "wikiEnabled": {
+                "type": "boolean"
+              },
+              "projectsEnabled": {
+                "type": "boolean"
+              },
+              "discussionsEnabled": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "value": {
+        "schema": "urn:repo-toolbox:repository-tab:settings:v1",
+        "repository": "dayour/copilot-rust-sdk",
+        "sourceUrl": "https://github.com/dayour/copilot-rust-sdk/settings",
+        "inventoryObservedAt": "2026-11-17T07:24:50.4079270Z",
+        "metadataStatus": "complete",
+        "data": {
+          "visibility": "public",
+          "archived": false,
+          "disabled": false,
+          "template": false,
+          "defaultBranch": "main",
+          "allowForking": true,
+          "issuesEnabled": true,
+          "wikiEnabled": true,
+          "projectsEnabled": true,
+          "discussionsEnabled": false
+        }
+      },
+      "sources": {
+        "snapshot": {
+          "status": "observed",
+          "observedAt": "2026-11-17T07:24:50.4079270Z",
+          "source": "Repository metadata snapshot",
+          "detail": null
+        }
+      },
+      "notApplicable": [],
+      "attention": {
+        "state": "clear",
+        "rank": 0,
+        "failedCount": 0,
+        "missingCount": 0,
+        "flags": [],
+        "style": {
+          "outline": "#ff8c00",
+          "background": "linear-gradient(135deg, rgba(101, 67, 33, 0.28), rgba(60, 35, 18, 0.10))"
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Portable metadata projection, not the complete operator inventory or a live observation.",
+    "No local paths, private alerts, traffic analytics, issue bodies, project details, or other repository records.",
+    "Configuration counts are dated observations, not proof of running agent sessions.",
+    "AC3 is the distribution folder; this document uses the repo-toolbox AgentCard v1 contract."
+  ]
+}
